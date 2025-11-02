@@ -44,6 +44,7 @@ class Cmd(str, Enum):
     remote = "remote"
     stash = "stash"
     submodule = "submodule"
+    cherry_pick = "cherry-pick"
 
 
 class GitInput(BaseModel):
@@ -201,6 +202,18 @@ def _map_diff(args: Dict[str, Any]) -> List[str]:
         argv.append("--cached")
     if args.get("name_only"):
         argv.append("--name-only")
+    if args.get("stat"):
+        argv.append("--stat")
+    unified = args.get("unified")
+    if unified is not None:
+        argv.extend(["-U", str(unified)])
+    if args.get("color_words"):
+        argv.append("--color-words")
+    pathspec = args.get("paths")
+    if isinstance(pathspec, (list, tuple)):
+        _extend(argv, [str(item) for item in pathspec])
+    elif pathspec:
+        argv.append(str(pathspec))
     against = args.get("against")
     if against:
         argv.append(str(against))
@@ -403,6 +416,38 @@ def _map_submodule(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
     raise ValueError(f"unsupported submodule action: {action}")
 
 
+def _map_cherry_pick(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    if args.get("continue"):
+        return ["cherry-pick", "--continue"]
+    if args.get("abort"):
+        return ["cherry-pick", "--abort"]
+    if args.get("quit"):
+        return ["cherry-pick", "--quit"]
+    if args.get("skip"):
+        return ["cherry-pick", "--skip"]
+
+    commits = args.get("commits") or args.get("commit")
+    if not commits:
+        raise ValueError("cherry-pick requires commit hash or list of hashes")
+
+    argv: List[str] = ["cherry-pick"]
+    if args.get("no_commit"):
+        argv.append("--no-commit")
+    if args.get("signoff"):
+        argv.append("--signoff")
+    if args.get("edit"):
+        argv.append("--edit")
+
+    if isinstance(commits, (list, tuple)):
+        if not commits:
+            raise ValueError("cherry-pick commits list cannot be empty")
+        _extend(argv, [str(item) for item in commits])
+    else:
+        argv.append(str(commits))
+
+    return argv
+
+
 Mapper = Callable[[Dict[str, Any], bool], List[str]]
 
 _MAP: Dict[Cmd, Mapper] = {
@@ -425,6 +470,7 @@ _MAP: Dict[Cmd, Mapper] = {
     Cmd.remote: lambda args, allow: _map_remote(args, allow),
     Cmd.stash: lambda args, allow: _map_stash(args, allow),
     Cmd.submodule: lambda args, allow: _map_submodule(args, allow),
+    Cmd.cherry_pick: lambda args, allow: _map_cherry_pick(args, allow),
 }
 
 
@@ -520,8 +566,11 @@ class GitFlowInput(BaseModel):
     diff_scope: DiffScope = DiffScope.staged
     diff_target: Optional[str] = None
     include_readme: bool = True
+    include_diff: bool = True
+    include_status: bool = True
     max_readme_chars: int = 4000
     max_diff_chars: int = 8000
+    max_status_chars: int = 2000
     extra_context: Optional[str] = None
     temperature: float = 0.2
     timeout_sec: int = 120
@@ -538,7 +587,7 @@ class GitFlowInput(BaseModel):
             raise ValueError("temperature must be between 0 and 2")
         return value
 
-    @validator("max_readme_chars", "max_diff_chars")
+    @validator("max_readme_chars", "max_diff_chars", "max_status_chars")
     def _positive_int(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("maximum lengths must be positive")
@@ -625,6 +674,9 @@ def _read_file(path: str, limit: int) -> str:
 def _collect_diff(payload: GitFlowInput) -> str:
     """Capture git diff output based on the requested scope."""
 
+    if not payload.include_diff:
+        return ""
+
     if payload.diff_scope is DiffScope.staged:
         argv = ["diff", "--cached"]
     elif payload.diff_scope is DiffScope.workspace:
@@ -639,6 +691,18 @@ def _collect_diff(payload: GitFlowInput) -> str:
     return str(result["stdout"])[: payload.max_diff_chars]
 
 
+def _collect_status(payload: GitFlowInput) -> str:
+    """Capture a concise git status for additional context."""
+
+    if not payload.include_status:
+        return ""
+
+    result = _run_git(payload.repo_path, ["status", "-sb"], timeout=payload.timeout_sec)
+    if result["exit_code"] != 0:
+        raise RuntimeError(result["stderr"] or "failed to collect status")
+    return str(result["stdout"])[: payload.max_status_chars]
+
+
 def _build_context(payload: GitFlowInput) -> Dict[str, str]:
     """Gather README and diff context for the prompt."""
 
@@ -649,10 +713,12 @@ def _build_context(payload: GitFlowInput) -> Dict[str, str]:
             readme_content = _read_file(readme_path, payload.max_readme_chars)
 
     diff_content = _collect_diff(payload)
+    status_content = _collect_status(payload)
 
     return {
         "readme": readme_content,
         "diff": diff_content,
+        "status": status_content,
         "extra": payload.extra_context or "",
     }
 
@@ -764,6 +830,8 @@ def _format_prompt(payload: GitFlowInput, context: Dict[str, str]) -> List[Dict[
         segments.append("# 额外上下文\n" + context["extra"].strip())
     if context["readme"]:
         segments.append("# 项目 README 摘要\n" + context["readme"].strip())
+    if context["status"]:
+        segments.append("# Git 状态\n" + context["status"].strip())
     if context["diff"]:
         segments.append(f"# Git Diff（{payload.diff_scope.value}）\n" + context["diff"].strip())
 
@@ -792,6 +860,8 @@ def _format_combo_prompt(
         segments.append("# 额外上下文\n" + context["extra"].strip())
     if context["readme"]:
         segments.append("# 项目 README 摘要\n" + context["readme"].strip())
+    if context["status"]:
+        segments.append("# Git 状态\n" + context["status"].strip())
     if context["diff"]:
         segments.append(f"# Git Diff（{payload.diff_scope.value}）\n" + context["diff"].strip())
 
