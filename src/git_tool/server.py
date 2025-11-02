@@ -9,8 +9,10 @@ import json
 import os
 import shlex
 import subprocess
+import urllib.error
+import urllib.request
 from enum import Enum
-from typing import Any, Callable, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from mcp.server.fastapi import FastAPIMCPServer
 from pydantic import BaseModel, Field, validator
@@ -37,6 +39,9 @@ class Cmd(str, Enum):
     reset = "reset"
     revert = "revert"
     clean = "clean"
+    remote = "remote"
+    stash = "stash"
+    submodule = "submodule"
 
 
 class GitInput(BaseModel):
@@ -286,6 +291,116 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
     return argv
 
 
+def _map_remote(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    action = args.get("action", "list")
+    if action == "list":
+        argv: List[str] = ["remote"]
+        if args.get("verbose", True):
+            argv.append("-v")
+        return argv
+
+    name = args.get("name")
+    if not name:
+        raise ValueError("remote action requires name")
+
+    if action == "add":
+        url = args.get("url")
+        if not url:
+            raise ValueError("remote add requires url")
+        return ["remote", "add", str(name), str(url)]
+
+    if action in {"remove", "rm"}:
+        return ["remote", "remove", str(name)]
+
+    if action == "set_url":
+        url = args.get("url")
+        if not url:
+            raise ValueError("remote set_url requires url")
+        return ["remote", "set-url", str(name), str(url)]
+
+    if action == "rename":
+        new_name = args.get("new_name")
+        if not new_name:
+            raise ValueError("remote rename requires new_name")
+        return ["remote", "rename", str(name), str(new_name)]
+
+    if action == "prune":
+        return ["remote", "prune", str(name)]
+
+    raise ValueError(f"unsupported remote action: {action}")
+
+
+def _map_stash(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    action = args.get("action", "list")
+
+    if action == "list":
+        return ["stash", "list"]
+
+    if action == "push":
+        argv: List[str] = ["stash", "push"]
+        if args.get("include_untracked"):
+            argv.append("--include-untracked")
+        if args.get("all"):
+            argv.append("--all")
+        message = args.get("message")
+        if message:
+            _extend(argv, ["-m", str(message)])
+        pathspec = args.get("pathspec")
+        if pathspec:
+            if isinstance(pathspec, (list, tuple)):
+                _extend(argv, [str(item) for item in pathspec])
+            else:
+                argv.append(str(pathspec))
+        return argv
+
+    if action in {"apply", "pop", "drop"}:
+        ref = args.get("ref")
+        argv = ["stash", action]
+        if action == "drop":
+            _ensure_safe(True, allow_destructive, "stash drop")
+        if ref:
+            argv.append(str(ref))
+        return argv
+
+    if action == "clear":
+        _ensure_safe(True, allow_destructive, "stash clear")
+        return ["stash", "clear"]
+
+    raise ValueError(f"unsupported stash action: {action}")
+
+
+def _map_submodule(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    action = args.get("action", "update")
+
+    if action == "update":
+        argv: List[str] = ["submodule", "update"]
+        if args.get("init", True):
+            argv.append("--init")
+        if args.get("recursive", True):
+            argv.append("--recursive")
+        path = args.get("path")
+        if path:
+            argv.append(str(path))
+        return argv
+
+    if action == "sync":
+        argv = ["submodule", "sync"]
+        if args.get("recursive", True):
+            argv.append("--recursive")
+        path = args.get("path")
+        if path:
+            argv.append(str(path))
+        return argv
+
+    if action == "status":
+        argv = ["submodule", "status"]
+        if args.get("recursive"):
+            argv.append("--recursive")
+        return argv
+
+    raise ValueError(f"unsupported submodule action: {action}")
+
+
 Mapper = Callable[[Dict[str, Any], bool], List[str]]
 
 _MAP: Dict[Cmd, Mapper] = {
@@ -305,6 +420,9 @@ _MAP: Dict[Cmd, Mapper] = {
     Cmd.reset: _map_reset,
     Cmd.revert: lambda args, allow: _map_revert(args),
     Cmd.clean: _map_clean,
+    Cmd.remote: lambda args, allow: _map_remote(args, allow),
+    Cmd.stash: lambda args, allow: _map_stash(args, allow),
+    Cmd.submodule: lambda args, allow: _map_submodule(args, allow),
 }
 
 
@@ -364,3 +482,276 @@ def git(
 
 
 __all__ = ["app", "server", "git", "GitInput", "Cmd"]
+
+
+class FlowAction(str, Enum):
+    """Supported git flow automation actions."""
+
+    generate_commit_message = "generate_commit_message"
+
+
+class FlowProvider(str, Enum):
+    """LLM providers available for git_flow."""
+
+    opengpt = "opengpt"
+    deepseek = "deepseek"
+
+
+class DiffScope(str, Enum):
+    """Supported diff collection strategies."""
+
+    staged = "staged"
+    workspace = "workspace"
+    head = "head"
+
+
+class GitFlowInput(BaseModel):
+    """Validated input for git_flow automation."""
+
+    repo_path: str
+    action: FlowAction = FlowAction.generate_commit_message
+    provider: FlowProvider = FlowProvider.opengpt
+    model: Optional[str] = None
+    system_prompt: Optional[str] = None
+    user_prompt: Optional[str] = None
+    diff_scope: DiffScope = DiffScope.staged
+    diff_target: Optional[str] = None
+    include_readme: bool = True
+    max_readme_chars: int = 4000
+    max_diff_chars: int = 8000
+    extra_context: Optional[str] = None
+    temperature: float = 0.2
+    timeout_sec: int = 120
+
+    @validator("repo_path")
+    def _repo_exists(cls, value: str) -> str:
+        return GitInput._repo_exists(value)
+
+    @validator("temperature")
+    def _validate_temperature(cls, value: float) -> float:
+        if not 0.0 <= value <= 2.0:
+            raise ValueError("temperature must be between 0 and 2")
+        return value
+
+    @validator("max_readme_chars", "max_diff_chars")
+    def _positive_int(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("maximum lengths must be positive")
+        return value
+
+    @validator("timeout_sec")
+    def _positive_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("timeout_sec must be positive")
+        return value
+
+
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are an experienced software engineer who writes Conventional Commits."
+)
+_DEFAULT_USER_PROMPT = (
+    "请基于以下项目上下文与 diff，生成一条简洁的 Conventional Commit 信息，并给出简短的正文说明。"
+)
+
+
+_PROVIDER_CONFIG: Dict[FlowProvider, Dict[str, Optional[str]]] = {
+    FlowProvider.opengpt: {
+        "api_key_env": "OPENGPT_API_KEY",
+        "url_env": "OPENGPT_API_URL",
+        "default_url": "https://api.opengpt.com/v1/chat/completions",
+        "model_env": "OPENGPT_MODEL",
+        "default_model": "gpt-4.1-mini",
+        "auth_header": "Authorization",
+        "auth_scheme": "Bearer",
+    },
+    FlowProvider.deepseek: {
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "url_env": "DEEPSEEK_API_URL",
+        "default_url": "https://api.deepseek.com/v1/chat/completions",
+        "model_env": "DEEPSEEK_MODEL",
+        "default_model": "deepseek-chat",
+        "auth_header": "Authorization",
+        "auth_scheme": "Bearer",
+    },
+}
+
+
+def _find_readme(repo_path: str) -> Optional[str]:
+    """Locate a README file within the repository root."""
+
+    for name in ("README.md", "README.MD", "README.txt", "README"):
+        candidate = os.path.join(repo_path, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _read_file(path: str, limit: int) -> str:
+    """Read a file and truncate to the provided character limit."""
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+    except UnicodeDecodeError:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            content = handle.read()
+    return content[:limit]
+
+
+def _collect_diff(payload: GitFlowInput) -> str:
+    """Capture git diff output based on the requested scope."""
+
+    if payload.diff_scope is DiffScope.staged:
+        argv = ["diff", "--cached"]
+    elif payload.diff_scope is DiffScope.workspace:
+        argv = ["diff"]
+    else:
+        target = payload.diff_target or "HEAD"
+        argv = ["diff", str(target)]
+
+    result = _run_git(payload.repo_path, argv, timeout=payload.timeout_sec)
+    if result["exit_code"] != 0:
+        raise RuntimeError(result["stderr"] or "failed to collect diff")
+    return str(result["stdout"])[: payload.max_diff_chars]
+
+
+def _build_context(payload: GitFlowInput) -> Dict[str, str]:
+    """Gather README and diff context for the prompt."""
+
+    readme_content = ""
+    if payload.include_readme:
+        readme_path = _find_readme(payload.repo_path)
+        if readme_path:
+            readme_content = _read_file(readme_path, payload.max_readme_chars)
+
+    diff_content = _collect_diff(payload)
+
+    return {
+        "readme": readme_content,
+        "diff": diff_content,
+        "extra": payload.extra_context or "",
+    }
+
+
+def _call_provider(
+    payload: GitFlowInput,
+    messages: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Send prompt to the configured provider and parse the response."""
+
+    config = _PROVIDER_CONFIG[payload.provider]
+    api_key_env = config["api_key_env"]
+    assert api_key_env is not None
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise RuntimeError(f"missing API key: set {api_key_env}")
+
+    url_env = config["url_env"]
+    url = os.environ.get(url_env) if url_env else None
+    if not url:
+        url = config.get("default_url")
+    if not url:
+        raise RuntimeError("no API endpoint configured")
+
+    model_env = config.get("model_env")
+    chosen_model = payload.model or (os.environ.get(model_env) if model_env else None) or config.get("default_model")
+    if not chosen_model:
+        raise RuntimeError("no model configured")
+
+    body = json.dumps(
+        {
+            "model": chosen_model,
+            "messages": messages,
+            "temperature": payload.temperature,
+        }
+    ).encode("utf-8")
+
+    headers = {"Content-Type": "application/json"}
+    header = config.get("auth_header") or "Authorization"
+    scheme = config.get("auth_scheme") or "Bearer"
+    headers[header] = f"{scheme} {api_key}" if scheme else api_key
+
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"provider error: {exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"provider unreachable: {exc.reason}") from exc
+
+    data = json.loads(raw)
+    content = ""
+    if isinstance(data, dict):
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if isinstance(message, dict):
+                    content = str(message.get("content") or "").strip()
+    return {"content": content, "raw": data, "model": chosen_model, "url": url}
+
+
+def _format_prompt(payload: GitFlowInput, context: Dict[str, str]) -> List[Dict[str, str]]:
+    """Assemble chat messages for the provider."""
+
+    system = payload.system_prompt or _DEFAULT_SYSTEM_PROMPT
+    user = payload.user_prompt or _DEFAULT_USER_PROMPT
+
+    segments = [user]
+    if context["extra"]:
+        segments.append("# 额外上下文\n" + context["extra"].strip())
+    if context["readme"]:
+        segments.append("# 项目 README 摘要\n" + context["readme"].strip())
+    if context["diff"]:
+        segments.append(f"# Git Diff（{payload.diff_scope.value}）\n" + context["diff"].strip())
+
+    user_message = "\n\n".join(segment for segment in segments if segment)
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_message},
+    ]
+
+
+def _handle_git_flow(payload: GitFlowInput) -> Dict[str, Any]:
+    """Execute the requested git_flow automation."""
+
+    if payload.action is not FlowAction.generate_commit_message:
+        raise ValueError(f"unsupported git_flow action: {payload.action}")
+
+    context = _build_context(payload)
+    messages = _format_prompt(payload, context)
+    response = _call_provider(payload, messages)
+
+    if not response["content"]:
+        raise RuntimeError("provider returned empty content")
+
+    return {
+        "exit_code": 0,
+        "stdout": response["content"],
+        "stderr": "",
+        "details": {
+            "provider": payload.provider.value,
+            "model": response["model"],
+            "diff_scope": payload.diff_scope.value,
+            "endpoint": response["url"],
+        },
+    }
+
+
+@server.tool()
+def git_flow(**kwargs: Any) -> str:
+    """Expose git workflow automations powered by external LLM providers."""
+
+    payload = GitFlowInput(**kwargs)
+    try:
+        result = _handle_git_flow(payload)
+    except Exception as exc:  # noqa: BLE001 - surfaced to clients as structured error
+        return json.dumps({"exit_code": 1, "stdout": "", "stderr": str(exc)})
+    return json.dumps(result)
+
+
+__all__.extend(["git_flow", "GitFlowInput", "FlowProvider", "DiffScope", "FlowAction"])
