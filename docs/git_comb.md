@@ -279,7 +279,8 @@ git branch -vv | awk '/: gone]/{print $1}' | xargs -r git branch -D
 
 1. 通过 `combo_name` 选择组合（例如 `safe_sync`、`feature_start`）。
 2. 若需要为 `<branch>`、`<tag>` 等占位符提供默认值，可传入 `combo_replacements` 字典。
-3. 工具会自动拼接 README 摘要、Git Diff 与额外上下文，并调用 LLM 生成“适用场景、分步指令、脚本模板”等说明。
+3. 工具会自动拼接 README 摘要、Git Diff 与额外上下文，并调用 LLM 生成“适用场景、分步指令、脚本模板”等说明；当占位符仍未完全补齐时，模型会根据提示词尝试补全或给出解决策略。
+4. 通过 `system_prompt` 与 `user_prompt` 参数可以完全控制 LLM 的话术，例如要求列出冲突解决建议、生成可直接粘贴到终端的命令，或提醒在执行前备份。
 
 示例请求：
 
@@ -294,3 +295,5 @@ git branch -vv | awk '/: gone]/{print $1}' | xargs -r git branch -D
 ```
 
 响应会返回结构化 `details.combo` 字段，标记使用的组合名称，方便在客户端展示执行计划或进行后续自动化。
+
+> 提示：若担心 rebase/merge 出现冲突，可在自定义 prompt 中要求模型说明冲突处理步骤，或让它生成“若失败时的回滚命令”。

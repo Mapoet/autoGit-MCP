@@ -5,7 +5,7 @@
 ## 功能概览
 
 - **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `remote`、`stash`、`submodule` 等拓展指令。
-- **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案。
+- **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
 - **FastAPI MCP Server**：基于 `mcp.server.fastapi.FastAPIMCPServer` 暴露工具，便于与任意兼容 MCP 的客户端集成。
 
 更多设计细节可参考仓库中的 [`docs/`](docs/) 与 [`guide.md`](guide.md)。
@@ -70,8 +70,9 @@
   "max_diff_chars": 8000,
   "extra_context": "其他上下文",
   "temperature": 0.2,
+  // --- combo_plan 专用字段 ---
   "combo_name": "safe_sync",            // action 为 combo_plan 时必填
-  "combo_replacements": { "branch": "main" } // 可选占位符替换
+  "combo_replacements": { "branch": "main" } // 可选占位符替换，缺省时会在提示词中保留占位符交由模型补全
 }
 ```
 
@@ -91,7 +92,7 @@
 }
 ```
 
-若调用模型失败，`stderr` 会包含错误描述，同时 `exit_code` 为非零值。
+若调用模型失败，`stderr` 会包含错误描述，同时 `exit_code` 为非零值。无论 `action` 类型如何，均可通过 `system_prompt` 与 `user_prompt` 覆盖默认提示词，从而让模型输出自定义的占位符填充策略、冲突处理建议或额外的安全提醒。
 
 ## 提示词模板
 
