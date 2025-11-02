@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from mcp.server.fastapi import FastAPIMCPServer
 from pydantic import BaseModel, Field, validator
 
+from .git_combos import Combo, get_combo
+
 app, server = FastAPIMCPServer("git-mcp")
 
 
@@ -488,6 +490,7 @@ class FlowAction(str, Enum):
     """Supported git flow automation actions."""
 
     generate_commit_message = "generate_commit_message"
+    combo_plan = "combo_plan"
 
 
 class FlowProvider(str, Enum):
@@ -522,6 +525,8 @@ class GitFlowInput(BaseModel):
     extra_context: Optional[str] = None
     temperature: float = 0.2
     timeout_sec: int = 120
+    combo_name: Optional[str] = None
+    combo_replacements: Dict[str, str] = Field(default_factory=dict)
 
     @validator("repo_path")
     def _repo_exists(cls, value: str) -> str:
@@ -545,12 +550,31 @@ class GitFlowInput(BaseModel):
             raise ValueError("timeout_sec must be positive")
         return value
 
+    @validator("combo_name", always=True)
+    def _validate_combo(cls, value: Optional[str], values: Dict[str, Any]) -> Optional[str]:
+        action = values.get("action")
+        if action is FlowAction.combo_plan and not value:
+            raise ValueError("combo_name is required when action=combo_plan")
+        return value
+
 
 _DEFAULT_SYSTEM_PROMPT = (
     "You are an experienced software engineer who writes Conventional Commits."
 )
 _DEFAULT_USER_PROMPT = (
     "请基于以下项目上下文与 diff，生成一条简洁的 Conventional Commit 信息，并给出简短的正文说明。"
+)
+
+_DEFAULT_COMBO_SYSTEM_PROMPT = (
+    "You are a senior Git expert who designs safe, reproducible command plans."
+)
+_DEFAULT_COMBO_USER_PROMPT = (
+    "请基于给定的 Git 组合命令模板，为当前仓库生成执行说明：\n"
+    "1. 概述适用场景与前置条件。\n"
+    "2. 逐步列出每条 git 命令，并解释目的与注意事项。\n"
+    "3. 如包含占位符，请提醒用户替换并给出建议值。\n"
+    "4. 若提供了 README 摘要或 diff，请结合说明风险与验证步骤。\n"
+    "5. 最后输出可直接复制的脚本片段。"
 )
 
 
@@ -631,6 +655,41 @@ def _build_context(payload: GitFlowInput) -> Dict[str, str]:
         "diff": diff_content,
         "extra": payload.extra_context or "",
     }
+
+
+def _apply_replacements(text: str, replacements: Dict[str, str]) -> str:
+    """Replace angle-bracket placeholders using provided replacements."""
+
+    result = text
+    for key, value in replacements.items():
+        placeholder = f"<{key}>"
+        result = result.replace(placeholder, value)
+    return result
+
+
+def _render_combo_details(combo: Combo, replacements: Dict[str, str]) -> str:
+    """Format combo metadata for prompt injection."""
+
+    summary = _apply_replacements(combo["summary"], replacements)
+    parameters = _apply_replacements(combo["parameters"], replacements)
+    notes = _apply_replacements(combo["notes"], replacements)
+
+    steps = [
+        f"{index + 1}. {_apply_replacements(step, replacements)}"
+        for index, step in enumerate(combo["steps"])
+    ]
+    steps_block = "\n".join(steps)
+
+    script = _apply_replacements(combo["script"], replacements).strip()
+
+    return (
+        f"名称：{combo['name']}\n"
+        f"用途：{summary}\n"
+        f"参数建议：{parameters}\n"
+        f"执行步骤：\n{steps_block}\n\n"
+        f"脚本模板：\n```bash\n{script}\n```\n\n"
+        f"补充说明：{notes}"
+    )
 
 
 def _call_provider(
@@ -716,30 +775,81 @@ def _format_prompt(payload: GitFlowInput, context: Dict[str, str]) -> List[Dict[
     ]
 
 
+def _format_combo_prompt(
+    payload: GitFlowInput,
+    context: Dict[str, str],
+    combo: Combo,
+) -> List[Dict[str, str]]:
+    """Build chat messages for combo execution planning."""
+
+    system = payload.system_prompt or _DEFAULT_COMBO_SYSTEM_PROMPT
+    user = payload.user_prompt or _DEFAULT_COMBO_USER_PROMPT
+
+    combo_details = _render_combo_details(combo, payload.combo_replacements)
+
+    segments = [user, "# 组合命令模板\n" + combo_details]
+    if context["extra"]:
+        segments.append("# 额外上下文\n" + context["extra"].strip())
+    if context["readme"]:
+        segments.append("# 项目 README 摘要\n" + context["readme"].strip())
+    if context["diff"]:
+        segments.append(f"# Git Diff（{payload.diff_scope.value}）\n" + context["diff"].strip())
+
+    user_message = "\n\n".join(segment for segment in segments if segment)
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_message},
+    ]
+
+
 def _handle_git_flow(payload: GitFlowInput) -> Dict[str, Any]:
     """Execute the requested git_flow automation."""
 
-    if payload.action is not FlowAction.generate_commit_message:
-        raise ValueError(f"unsupported git_flow action: {payload.action}")
+    if payload.action is FlowAction.generate_commit_message:
+        context = _build_context(payload)
+        messages = _format_prompt(payload, context)
+        response = _call_provider(payload, messages)
 
-    context = _build_context(payload)
-    messages = _format_prompt(payload, context)
-    response = _call_provider(payload, messages)
+        if not response["content"]:
+            raise RuntimeError("provider returned empty content")
 
-    if not response["content"]:
-        raise RuntimeError("provider returned empty content")
+        return {
+            "exit_code": 0,
+            "stdout": response["content"],
+            "stderr": "",
+            "details": {
+                "provider": payload.provider.value,
+                "model": response["model"],
+                "diff_scope": payload.diff_scope.value,
+                "endpoint": response["url"],
+            },
+        }
 
-    return {
-        "exit_code": 0,
-        "stdout": response["content"],
-        "stderr": "",
-        "details": {
-            "provider": payload.provider.value,
-            "model": response["model"],
-            "diff_scope": payload.diff_scope.value,
-            "endpoint": response["url"],
-        },
-    }
+    if payload.action is FlowAction.combo_plan:
+        assert payload.combo_name is not None  # validated earlier
+        combo = get_combo(payload.combo_name)
+        context = _build_context(payload)
+        messages = _format_combo_prompt(payload, context, combo)
+        response = _call_provider(payload, messages)
+
+        if not response["content"]:
+            raise RuntimeError("provider returned empty content")
+
+        return {
+            "exit_code": 0,
+            "stdout": response["content"],
+            "stderr": "",
+            "details": {
+                "provider": payload.provider.value,
+                "model": response["model"],
+                "diff_scope": payload.diff_scope.value,
+                "endpoint": response["url"],
+                "combo": combo["name"],
+            },
+        }
+
+    raise ValueError(f"unsupported git_flow action: {payload.action}")
 
 
 @server.tool()

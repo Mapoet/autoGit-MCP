@@ -270,3 +270,27 @@ git branch -vv | awk '/: gone]/{print $1}' | xargs -r git branch -D
 * 每个组合输出结构化 `steps[]` 执行结果（stdout/stderr/exit_code），便于 UI 呈现；
 * 内置“提交信息生成器”（结合你的 GNSS/RayTracy 术语库）；
 * 带 **dry-run** 与 **回滚点**（记录进入组合前的 `HEAD`）。
+
+---
+
+## 与 `git_flow` 工具的集成
+
+仓库的 `git_flow` MCP 工具新增了 `combo_plan` 动作，可直接复用本文件列出的组合命令模板：
+
+1. 通过 `combo_name` 选择组合（例如 `safe_sync`、`feature_start`）。
+2. 若需要为 `<branch>`、`<tag>` 等占位符提供默认值，可传入 `combo_replacements` 字典。
+3. 工具会自动拼接 README 摘要、Git Diff 与额外上下文，并调用 LLM 生成“适用场景、分步指令、脚本模板”等说明。
+
+示例请求：
+
+```jsonc
+{
+  "repo_path": "/path/to/repo",
+  "action": "combo_plan",
+  "combo_name": "safe_sync",
+  "combo_replacements": { "branch": "main" },
+  "provider": "opengpt"
+}
+```
+
+响应会返回结构化 `details.combo` 字段，标记使用的组合名称，方便在客户端展示执行计划或进行后续自动化。
