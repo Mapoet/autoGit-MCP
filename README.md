@@ -4,7 +4,7 @@
 
 ## 功能概览
 
-- **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出。
+- **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `remote`、`stash`、`submodule` 等拓展指令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容。
 - **FastAPI MCP Server**：基于 `mcp.server.fastapi.FastAPIMCPServer` 暴露工具，便于与任意兼容 MCP 的客户端集成。
 

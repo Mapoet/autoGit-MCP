@@ -39,6 +39,9 @@ class Cmd(str, Enum):
     reset = "reset"
     revert = "revert"
     clean = "clean"
+    remote = "remote"
+    stash = "stash"
+    submodule = "submodule"
 
 
 class GitInput(BaseModel):
@@ -288,6 +291,116 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
     return argv
 
 
+def _map_remote(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    action = args.get("action", "list")
+    if action == "list":
+        argv: List[str] = ["remote"]
+        if args.get("verbose", True):
+            argv.append("-v")
+        return argv
+
+    name = args.get("name")
+    if not name:
+        raise ValueError("remote action requires name")
+
+    if action == "add":
+        url = args.get("url")
+        if not url:
+            raise ValueError("remote add requires url")
+        return ["remote", "add", str(name), str(url)]
+
+    if action in {"remove", "rm"}:
+        return ["remote", "remove", str(name)]
+
+    if action == "set_url":
+        url = args.get("url")
+        if not url:
+            raise ValueError("remote set_url requires url")
+        return ["remote", "set-url", str(name), str(url)]
+
+    if action == "rename":
+        new_name = args.get("new_name")
+        if not new_name:
+            raise ValueError("remote rename requires new_name")
+        return ["remote", "rename", str(name), str(new_name)]
+
+    if action == "prune":
+        return ["remote", "prune", str(name)]
+
+    raise ValueError(f"unsupported remote action: {action}")
+
+
+def _map_stash(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    action = args.get("action", "list")
+
+    if action == "list":
+        return ["stash", "list"]
+
+    if action == "push":
+        argv: List[str] = ["stash", "push"]
+        if args.get("include_untracked"):
+            argv.append("--include-untracked")
+        if args.get("all"):
+            argv.append("--all")
+        message = args.get("message")
+        if message:
+            _extend(argv, ["-m", str(message)])
+        pathspec = args.get("pathspec")
+        if pathspec:
+            if isinstance(pathspec, (list, tuple)):
+                _extend(argv, [str(item) for item in pathspec])
+            else:
+                argv.append(str(pathspec))
+        return argv
+
+    if action in {"apply", "pop", "drop"}:
+        ref = args.get("ref")
+        argv = ["stash", action]
+        if action == "drop":
+            _ensure_safe(True, allow_destructive, "stash drop")
+        if ref:
+            argv.append(str(ref))
+        return argv
+
+    if action == "clear":
+        _ensure_safe(True, allow_destructive, "stash clear")
+        return ["stash", "clear"]
+
+    raise ValueError(f"unsupported stash action: {action}")
+
+
+def _map_submodule(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
+    action = args.get("action", "update")
+
+    if action == "update":
+        argv: List[str] = ["submodule", "update"]
+        if args.get("init", True):
+            argv.append("--init")
+        if args.get("recursive", True):
+            argv.append("--recursive")
+        path = args.get("path")
+        if path:
+            argv.append(str(path))
+        return argv
+
+    if action == "sync":
+        argv = ["submodule", "sync"]
+        if args.get("recursive", True):
+            argv.append("--recursive")
+        path = args.get("path")
+        if path:
+            argv.append(str(path))
+        return argv
+
+    if action == "status":
+        argv = ["submodule", "status"]
+        if args.get("recursive"):
+            argv.append("--recursive")
+        return argv
+
+    raise ValueError(f"unsupported submodule action: {action}")
+
+
 Mapper = Callable[[Dict[str, Any], bool], List[str]]
 
 _MAP: Dict[Cmd, Mapper] = {
@@ -307,6 +420,9 @@ _MAP: Dict[Cmd, Mapper] = {
     Cmd.reset: _map_reset,
     Cmd.revert: lambda args, allow: _map_revert(args),
     Cmd.clean: _map_clean,
+    Cmd.remote: lambda args, allow: _map_remote(args, allow),
+    Cmd.stash: lambda args, allow: _map_stash(args, allow),
+    Cmd.submodule: lambda args, allow: _map_submodule(args, allow),
 }
 
 
