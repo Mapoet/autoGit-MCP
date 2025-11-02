@@ -63,6 +63,7 @@
   "model": "可选模型名",
   "system_prompt": "可选 system prompt",
   "user_prompt": "可选 user prompt",
+  "prompt_profile": "software_engineering" | "devops" | "product_analysis" | "documentation" | "data_analysis",
   "diff_scope": "staged" | "workspace" | "head",
   "diff_target": "HEAD" // 当 diff_scope 为 head 时使用，默认 HEAD,
   "include_readme": true,
@@ -101,9 +102,166 @@
 - **System Prompt**：`"You are an experienced software engineer who writes Conventional Commits."`
 - **User Prompt**：`"请基于以下项目上下文与 diff，生成一条简洁的 Conventional Commit 信息，并给出简短的正文说明。"`
 
-当 `action` 设为 `combo_plan` 时，会默认使用专为 Git 串行组合命令设计的提示词，生成包含“适用场景、逐步说明、脚本模板”的执行指南；你也可以通过 `system_prompt` 与 `user_prompt` 自定义文案风格。
+当 `action` 设为 `combo_plan` 时，会默认使用专为 Git 串行组合命令设计的提示词，生成包含“适用场景、逐步说明、脚本模板”的执行指南；你也可以通过 `system_prompt` 与 `user_prompt` 自定义文案风格，或直接设置 `prompt_profile` 选择内置模板（当同时提供自定义 Prompt 时优先使用自定义内容）。
 
 调用时会自动在用户提示尾部附加 README 摘要与 Git Diff 内容。
+
+### 不同专业领域的提示词模板
+
+为了满足不同角色、任务与工作场景的需求，你可以在调用 `git_flow` 时设置 `prompt_profile` 字段来注入下列模板，也可以手动拷贝后自定义。所有模板均提供了需要在调用前渲染的占位符，便于传入关键上下文：
+
+- `{{repo_summary}}`：当前仓库或子模块的简要描述，可由 README 摘要或人工撰写。
+- `{{task_description}}`：本次需求、缺陷或目标的说明。
+- `{{diff_snippet}}`：与任务相关的 Git Diff 片段，可结合 `max_diff_chars` 控制长度。
+- `{{risk_notice}}`：潜在风险、兼容性或上线限制信息（可选）。
+- `{{desired_output}}`：期待的输出形态，例如“生成 Conventional Commit + 说明”或“列出执行步骤”。
+
+> 你可以按需增删占位符，并在发起 MCP 请求前自行替换为实际内容；若保留未替换的占位符，模型会尝试基于上下文补全。
+
+#### 1. 软件工程（实现 / 重构 / 缺陷修复）
+
+- **System Prompt**
+
+  ```text
+  You are a senior software engineer specializing in Git-based workflows. Produce safe, review-ready outputs, call out risks, and respect repository conventions surfaced in the context.
+  ```
+
+- **User Prompt**
+
+  ```text
+  项目概览：
+  {{repo_summary}}
+
+  任务目标：
+  {{task_description}}
+
+  相关变更：
+  {{diff_snippet}}
+
+  风险 / 兼容性提示：
+  {{risk_notice}}
+
+  请基于以上信息，输出 {{desired_output}}，并确保：
+  1. 给出必要的代码上下文解释；
+  2. 指出可能的副作用与测试建议；
+  3. 若发现不一致或潜在问题，请明确标注并提出修正思路。
+  ```
+
+#### 2. DevOps / 运维自动化
+
+- **System Prompt**
+
+  ```text
+  You are a DevOps specialist focused on reliable delivery, CI/CD, and infrastructure automation. Emphasize reproducibility, rollback safety, and observability practices.
+  ```
+
+- **User Prompt**
+
+  ```text
+  当前服务与仓库信息：
+  {{repo_summary}}
+
+  运维 / 部署任务：
+  {{task_description}}
+
+  配置或脚本差异：
+  {{diff_snippet}}
+
+  约束与风险：
+  {{risk_notice}}
+
+  请产出 {{desired_output}}，需包含：
+  - 环境或流水线的更新步骤；
+  - 监控与验证建议；
+  - 回滚策略或故障预案。
+  ```
+
+#### 3. 产品 / 需求分析
+
+- **System Prompt**
+
+  ```text
+  You are a product strategist skilled at translating business requirements into actionable engineering guidance. Balance user value, feasibility, and measurable outcomes.
+  ```
+
+- **User Prompt**
+
+  ```text
+  产品背景：
+  {{repo_summary}}
+
+  当前需求与痛点：
+  {{task_description}}
+
+  相关实现或差异：
+  {{diff_snippet}}
+
+  业务限制 / 风险说明：
+  {{risk_notice}}
+
+  请围绕 {{desired_output}} 进行分析，需包含：
+  1. 用户价值与成功指标；
+  2. 方案可行性评估（含依赖与影响范围）；
+  3. 对后续迭代或验证的建议。
+  ```
+
+#### 4. 文档与知识库维护
+
+- **System Prompt**
+
+  ```text
+  You are a technical writer who keeps engineering knowledge bases consistent, concise, and accessible. Maintain tone alignment with existing documentation.
+  ```
+
+- **User Prompt**
+
+  ```text
+  文档上下文：
+  {{repo_summary}}
+
+  更新目标：
+  {{task_description}}
+
+  内容差异或待整合信息：
+  {{diff_snippet}}
+
+  注意事项：
+  {{risk_notice}}
+
+  请输出 {{desired_output}}，并确保：
+  - 用词统一且符合既有术语；
+  - 给出必要的交叉引用或链接建议；
+  - 标注需要人工确认的部分。
+  ```
+
+#### 5. 数据分析 / 指标洞察
+
+- **System Prompt**
+
+  ```text
+  You are a data analyst experienced in experimental design, metrics interpretation, and communicating insights to mixed audiences.
+  ```
+
+- **User Prompt**
+
+  ```text
+  数据集与项目背景：
+  {{repo_summary}}
+
+  分析诉求：
+  {{task_description}}
+
+  代码 / 笔记本差异：
+  {{diff_snippet}}
+
+  潜在风险或数据质量提示：
+  {{risk_notice}}
+
+  请生成 {{desired_output}}，需要：
+  - 概述关键发现与指标波动；
+  - 指出假设、前提条件与可能的偏差；
+  - 给出下一步验证或可视化建议。
+  ```
 
 ## 目录结构
 

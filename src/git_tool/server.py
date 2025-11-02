@@ -12,12 +12,13 @@ import subprocess
 import urllib.error
 import urllib.request
 from enum import Enum
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from mcp.server.fastapi import FastAPIMCPServer
 from pydantic import BaseModel, Field, validator
 
 from .git_combos import Combo, get_combo
+from .prompt_profiles import PROMPT_PROFILE_TEMPLATES, PromptProfile
 
 app, server = FastAPIMCPServer("git-mcp")
 
@@ -563,6 +564,7 @@ class GitFlowInput(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     user_prompt: Optional[str] = None
+    prompt_profile: Optional[PromptProfile] = None
     diff_scope: DiffScope = DiffScope.staged
     diff_target: Optional[str] = None
     include_readme: bool = True
@@ -625,6 +627,30 @@ _DEFAULT_COMBO_USER_PROMPT = (
     "4. 若提供了 README 摘要或 diff，请结合说明风险与验证步骤。\n"
     "5. 最后输出可直接复制的脚本片段。"
 )
+
+
+def _resolve_prompts(
+    payload: GitFlowInput,
+    *,
+    combo: bool = False,
+) -> Tuple[str, str]:
+    """Determine system/user prompt pair for the request."""
+
+    profile = payload.prompt_profile
+    if profile:
+        template = PROMPT_PROFILE_TEMPLATES.get(profile)
+        if template:
+            system = payload.system_prompt or template["system"]
+            user = payload.user_prompt or template["user"]
+            return system, user
+
+    default_system = _DEFAULT_COMBO_SYSTEM_PROMPT if combo else _DEFAULT_SYSTEM_PROMPT
+    default_user = _DEFAULT_COMBO_USER_PROMPT if combo else _DEFAULT_USER_PROMPT
+
+    system = payload.system_prompt or default_system
+    user = payload.user_prompt or default_user
+
+    return system, user
 
 
 _PROVIDER_CONFIG: Dict[FlowProvider, Dict[str, Optional[str]]] = {
@@ -822,8 +848,7 @@ def _call_provider(
 def _format_prompt(payload: GitFlowInput, context: Dict[str, str]) -> List[Dict[str, str]]:
     """Assemble chat messages for the provider."""
 
-    system = payload.system_prompt or _DEFAULT_SYSTEM_PROMPT
-    user = payload.user_prompt or _DEFAULT_USER_PROMPT
+    system, user = _resolve_prompts(payload)
 
     segments = [user]
     if context["extra"]:
@@ -850,8 +875,7 @@ def _format_combo_prompt(
 ) -> List[Dict[str, str]]:
     """Build chat messages for combo execution planning."""
 
-    system = payload.system_prompt or _DEFAULT_COMBO_SYSTEM_PROMPT
-    user = payload.user_prompt or _DEFAULT_COMBO_USER_PROMPT
+    system, user = _resolve_prompts(payload, combo=True)
 
     combo_details = _render_combo_details(combo, payload.combo_replacements)
 
@@ -934,4 +958,4 @@ def git_flow(**kwargs: Any) -> str:
     return json.dumps(result)
 
 
-__all__.extend(["git_flow", "GitFlowInput", "FlowProvider", "DiffScope", "FlowAction"])
+__all__.extend(["git_flow", "GitFlowInput", "FlowProvider", "DiffScope", "FlowAction", "PromptProfile"])
