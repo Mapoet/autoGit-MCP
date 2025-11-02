@@ -12,36 +12,58 @@
 
 ## 输入 Schema
 
+### 字段说明
+
 ```jsonc
 {
   "repo_path": "/path/to/repo",      // 必填，执行目录，需存在 .git
-  "cmd": "commit",                   // 枚举：status/add/commit/.../clean
-  "args": {                           // 各命令专属参数对象
+  "cmd": "commit",                   // 见下方支持的 Git 子命令枚举
+  "args": {                           // 针对 cmd 的参数对象
     "message": "feat: add solver",
     "all": true,
     "amend": false,
     "signoff": false
   },
-  "dry_run": false,                   // true: 仅返回即将执行的命令
-  "allow_destructive": false,         // true: 才允许 reset --hard / clean -fd 等
-  "timeout_sec": 120                  // 子进程超时
+  "dry_run": false,                   // true: 仅返回计划执行的命令
+  "allow_destructive": false,         // true: 放行 reset --hard / clean -fd / push --force 等危险动作
+  "timeout_sec": 120                  // 子进程执行超时（秒）
 }
 ```
 
-常见命令与参数示例：
+- **repo_path**：执行 Git 的工作目录；会在运行前校验 `repo_path/.git` 是否存在。
+- **cmd**：受控枚举，见下方表格；所有命令均通过参数映射生成实际 CLI。
+- **args**：每个 cmd 的专属参数对象，采用结构化字段而非拼接字符串。
+- **dry_run**：对危险动作（commit/merge/reset/revert/clean）返回 `DRY-RUN: git …`，便于预览。
+- **allow_destructive**：默认拒绝破坏性命令，显式开启后才会透传 `--force`、`--hard` 等选项。
+- **timeout_sec**：超时即返回非零 exit_code，并在 `stderr` 中提示。
 
-| cmd | args 示例 |
-| --- | --------- |
-| `status` | `{ "short": true }` → `git status -sb` |
-| `add` | `{ "paths": ["."], "patch": false, "all": false }` |
-| `commit` | `{ "message": "...", "all": false, "amend": false, "no_verify": false, "signoff": false }` |
-| `pull` | `{ "remote": "origin", "branch": null, "rebase": true }` |
-| `push` | `{ "remote": "origin", "branch": null, "set_upstream": true, "force": false, "force_with_lease": false, "tags": false }` |
-| `merge` | `{ "branch": "feature", "no_ff": true, "squash": false, "ff_only": false }` |
-| `rebase` | `{ "upstream": "origin/main", "interactive": false, "autosquash": true, "continue": false, "abort": false }` |
-| `diff` | `{ "cached": false, "name_only": false, "against": "HEAD" }` |
-| `reset` | `{ "mode": "soft", "target": "HEAD~1" }`（若 `mode` 为 `hard` 需 `allow_destructive=true`） |
-| `clean` | `{ "force": false, "dirs": false, "interactive": false }`（若 `force` 或 `dirs` 为真需 `allow_destructive=true`） |
+### cmd 与参数列表
+
+> 表格中的“默认值”指未显式传入时的安全默认行为。
+
+| cmd | 主要功能 | 参数字段（部分可选） | 默认值/说明 |
+| --- | --- | --- | --- |
+| `status` | 查看仓库状态 | `short: bool`, `branch: bool` | `short/branch` 任一为真时使用 `-sb` |
+| `add` | 暂存文件 | `paths: str \| List[str]`, `all: bool`, `patch: bool` | 默认暂存当前目录；`all=true` 等价 `-A` |
+| `commit` | 创建提交 | `message: str*`, `all: bool`, `amend: bool`, `no_verify: bool`, `signoff: bool` | `message` 必填；`all=true` 等价 `-a` |
+| `pull` | 拉取远端 | `remote: str`, `branch: str`, `rebase: bool` | 默认 `remote=origin`、`rebase=true` |
+| `push` | 推送变更 | `remote: str`, `branch: str`, `set_upstream: bool`, `force_with_lease: bool`, `force: bool`, `tags: bool` | `force` 需 `allow_destructive=true` |
+| `fetch` | 更新远端引用 | `remote: str`, `all: bool`, `prune: bool` | 默认 `prune=true` |
+| `merge` | 合并分支 | `branch: str*`, `no_ff: bool`, `ff_only: bool`, `squash: bool` | 默认 `no_ff=true` |
+| `rebase` | 变基操作 | `upstream: str*`, `interactive: bool`, `autosquash: bool`, `continue: bool`, `abort: bool` | `continue/abort` 互斥；默认 `autosquash=true` |
+| `diff` | 查看差异 | `cached: bool`, `name_only: bool`, `against: str` | 默认与 HEAD 比较 |
+| `log` | 查看历史 | `oneline: bool`, `graph: bool`, `decorate: bool`, `all: bool`, `max_count: int` | 默认开启 oneline/graph/decorate |
+| `branch` | 分支管理 | `create: str`, `delete: str`, `force: bool`, `verbose: bool` | 默认列出分支并附带跟踪信息 |
+| `switch` | 切换分支 | `branch: str*`, `create: bool` | `create=true` 等价 `git switch -c` |
+| `tag` | 标签管理 | `name: str`, `annotate: bool`, `message: str`, `delete: str`, `list: bool` | `annotate=true` 需提供 `message` |
+| `reset` | 重置 HEAD | `mode: "soft|mixed|hard"`, `target: str` | `mode=hard` 需 `allow_destructive=true` |
+| `revert` | 生成反向提交 | `commit: str*`, `no_edit: bool` | 默认 `--no-edit` |
+| `clean` | 清理工作区 | `force: bool`, `dirs: bool`, `interactive: bool` | `force/dirs` 任一为真需 `allow_destructive=true` |
+| `remote` | 远端管理 | `action: "list|add|remove|rename|set_url|prune"`, `name: str`, `url: str`, `new_name: str`, `verbose: bool` | `action=list` 时默认 `-v` |
+| `stash` | stash 操作 | `action: "list|push|apply|pop|drop|clear"`, `message: str`, `include_untracked: bool`, `all: bool`, `pathspec`, `ref: str` | `drop/clear` 需 `allow_destructive=true` |
+| `submodule` | 子模块管理 | `action: "update|sync|status"`, `init: bool`, `recursive: bool`, `path: str` | `update` 默认 `--init --recursive` |
+
+> 带 `*` 的字段为必填。所有参数都会在 Pydantic 层做类型校验并给出友好的错误提示。
 
 ## 输出 Schema
 
@@ -125,6 +147,36 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 * `sync`：`fetch --prune` → 判断是否落后 → `rebase` 或 `merge`。
 * `push_with_set_upstream`：首次推送本地分支，并在成功后返回远程 URL。
 * `release_tag`：创建注解标签，推送到远程，同时返回最新的 changelog。
+
+### `git_flow` combo_plan 输入补充
+
+`git_flow` 的 `combo_plan` 行为会基于 [`src/git_tool/git_combos.py`](../src/git_tool/git_combos.py) 中的模板，为用户生成逐步执行指南。完整的输入结构：
+
+```jsonc
+{
+  "repo_path": "/path/to/repo",
+  "action": "combo_plan",
+  "provider": "opengpt",               // 或 deepseek，自定义时可改
+  "model": "gpt-4.1-mini",             // 覆盖默认模型
+  "system_prompt": "可选自定义系统提示",
+  "user_prompt": "可选自定义用户提示",
+  "combo_name": "inspect_update_commit", // 必填：combo 标识
+  "combo_replacements": {               // 占位符填充
+    "branch": "feature/awesome",
+    "msg": "feat: add awesome flow"
+  },
+  "diff_scope": "staged",              // diff 上下文，同提交信息生成
+  "extra_context": "我们在处理线上事故，请优先推送",
+  "temperature": 0.2
+}
+```
+
+- **combo_name**：对应 `git_combos.py` 中的键，决定执行流程骨架。
+- **combo_replacements**：为脚本模板或步骤里的 `<branch>`、`<msg>` 等占位符赋值；若缺省则在提示词中保留原始占位符，由模型结合上下文补全。
+- **system_prompt / user_prompt**：允许用户完全替换默认提示词，用于调整语言、输出格式或强调冲突解决策略（例如要求模型说明解决冲突的办法、给出回滚提示）。
+- **diff_scope / extra_context**：与提交信息生成共享逻辑，可让模型参考最新 diff、需求描述等信息，进一步定制执行建议。
+
+若执行过程中可能遇到冲突（如 rebase/merge），可以在自定义提示中明确要求模型给出冲突解决步骤、推荐的 LLM 占位符消息或回退命令。客户端也可以在收到响应后将 `steps` 与 `script` 直接喂回 `git` 工具依次执行，形成自动化流水线。
 
 ## 与提示词生成的联动
 
