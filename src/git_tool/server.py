@@ -504,7 +504,34 @@ def git(
     ],
     args: Annotated[
         Optional[Dict[str, Any]],
-        Field(default=None, description="Optional dictionary of command-specific arguments. The structure depends on the cmd value. For example, for 'commit' cmd, args may contain 'message', 'all', 'amend', etc. See documentation for specific cmd argument schemas.")
+        Field(
+            default=None,
+            description=(
+                "Optional dictionary of command-specific arguments. The structure depends on the cmd value. "
+                "Supported cmd-specific args: "
+                "'status': {short: bool, branch: bool} - short/branch any true uses -sb; "
+                "'add': {paths: str|List[str], all: bool, patch: bool} - default stages current dir, all=true equals -A; "
+                "'commit': {message: str* (required), all: bool, amend: bool, no_verify: bool, signoff: bool} - message required, all=true equals -a; "
+                "'pull': {remote: str, branch: str, rebase: bool} - default remote=origin, rebase=true; "
+                "'push': {remote: str, branch: str, set_upstream: bool, force_with_lease: bool, force: bool (requires allow_destructive), tags: bool}; "
+                "'fetch': {remote: str, all: bool, prune: bool} - default prune=true; "
+                "'merge': {branch: str* (required), no_ff: bool, ff_only: bool, squash: bool} - default no_ff=true; "
+                "'rebase': {upstream: str* (required), interactive: bool, autosquash: bool, continue: bool, abort: bool} - continue/abort mutually exclusive, default autosquash=true; "
+                "'diff': {cached: bool, name_only: bool, against: str} - default compares with HEAD; "
+                "'log': {oneline: bool, graph: bool, decorate: bool, all: bool, max_count: int} - defaults enable oneline/graph/decorate; "
+                "'branch': {create: str, delete: str, force: bool, verbose: bool} - default lists branches with tracking info; "
+                "'switch': {branch: str* (required), create: bool} - create=true equals 'git switch -c'; "
+                "'tag': {name: str, annotate: bool, message: str, delete: str, list: bool} - annotate=true requires message; "
+                "'reset': {mode: 'soft'|'mixed'|'hard', target: str} - mode=hard requires allow_destructive; "
+                "'revert': {commit: str* (required), no_edit: bool} - default --no-edit; "
+                "'clean': {force: bool, dirs: bool, interactive: bool} - force/dirs any true requires allow_destructive; "
+                "'remote': {action: 'list'|'add'|'remove'|'rename'|'set_url'|'prune', name: str, url: str, new_name: str, verbose: bool} - action=list defaults to -v; "
+                "'stash': {action: 'list'|'push'|'apply'|'pop'|'drop'|'clear', message: str, include_untracked: bool, all: bool, pathspec, ref: str} - drop/clear require allow_destructive; "
+                "'submodule': {action: 'update'|'sync'|'status', init: bool, recursive: bool, path: str} - update defaults to --init --recursive; "
+                "'cherry-pick': {commits: str|List[str]* (required, or use 'commit'), continue: bool, abort: bool, quit: bool, skip: bool, no_commit: bool, edit: bool, signoff: bool} - commits/commit mutually exclusive with continue/abort/quit/skip. "
+                "Fields marked with * are required. All parameters are validated with type checking and provide friendly error messages."
+            ),
+        ),
     ],
     dry_run: Annotated[
         bool,
