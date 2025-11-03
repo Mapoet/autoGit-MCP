@@ -10,7 +10,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from enum import Enum
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Annotated, Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, validator
@@ -494,14 +494,36 @@ def _run_git(repo: str, argv: List[str], timeout: int) -> Dict[str, Any]:
 
 @server.tool()
 def git(
-    repo_path: str,
-    cmd: str,
-    args: Optional[Dict[str, Any]] = None,
-    dry_run: bool = False,
-    allow_destructive: bool = False,
-    timeout_sec: int = 120,
+    repo_path: Annotated[
+        str,
+        Field(description="The path to the Git repository directory. Must contain a .git subdirectory. This is the working directory where Git commands will be executed.")
+    ],
+    cmd: Annotated[
+        str,
+        Field(description="The Git subcommand to execute. Supported commands: status, add, commit, pull, push, fetch, merge, rebase, diff, log, branch, switch, tag, reset, revert, clean, remote, stash, submodule, cherry-pick.")
+    ],
+    args: Annotated[
+        Optional[Dict[str, Any]],
+        Field(default=None, description="Optional dictionary of command-specific arguments. The structure depends on the cmd value. For example, for 'commit' cmd, args may contain 'message', 'all', 'amend', etc. See documentation for specific cmd argument schemas.")
+    ],
+    dry_run: Annotated[
+        bool,
+        Field(default=False, description="If True, returns the command that would be executed without actually running it. Only applies to potentially destructive commands (commit, merge, reset, revert, clean). Returns a DRY-RUN message with the command string.")
+    ],
+    allow_destructive: Annotated[
+        bool,
+        Field(default=False, description="If True, allows execution of destructive Git operations such as 'reset --hard', 'clean -fd', 'push --force'. By default, these operations are blocked for safety. Must be explicitly set to True to enable.")
+    ],
+    timeout_sec: Annotated[
+        int,
+        Field(default=120, description="Maximum execution time in seconds for the Git command. If the command exceeds this timeout, it will be terminated and return a non-zero exit_code. Default is 120 seconds.")
+    ],
 ) -> str:
-    """Run a controlled Git command."""
+    """Run a controlled Git command.
+    
+    Executes a Git subcommand with structured arguments, validation, and safety checks.
+    Returns a JSON string containing exit_code, stdout, stderr, and optionally parsed results.
+    """
 
     payload = GitInput(
         repo_path=repo_path,
@@ -559,7 +581,7 @@ class GitFlowInput(BaseModel):
 
     repo_path: str
     action: FlowAction = FlowAction.generate_commit_message
-    provider: FlowProvider = FlowProvider.opengpt
+    provider: FlowProvider = FlowProvider.deepseek
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     user_prompt: Optional[str] = None
@@ -947,28 +969,98 @@ def _handle_git_flow(payload: GitFlowInput) -> Dict[str, Any]:
 
 @server.tool()
 def git_flow(
-    repo_path: str,
-    action: str = "generate_commit_message",
-    provider: str = "opengpt",
-    model: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-    user_prompt: Optional[str] = None,
-    prompt_profile: Optional[str] = None,
-    diff_scope: str = "staged",
-    diff_target: Optional[str] = None,
-    include_readme: bool = True,
-    include_diff: bool = True,
-    include_status: bool = True,
-    max_readme_chars: int = 4000,
-    max_diff_chars: int = 8000,
-    max_status_chars: int = 2000,
-    extra_context: Optional[str] = None,
-    temperature: float = 0.2,
-    timeout_sec: int = 120,
-    combo_name: Optional[str] = None,
-    combo_replacements: Optional[Dict[str, str]] = None,
+    repo_path: Annotated[
+        str,
+        Field(description="The path to the Git repository directory. Must contain a .git subdirectory. This repository's README and Git changes will be used as context for LLM processing.")
+    ],
+    action: Annotated[
+        str,
+        Field(default="generate_commit_message", description="The automation action to perform. Supported values: 'generate_commit_message' (generate a conventional commit message from changes) or 'combo_plan' (generate an execution plan for a Git combo command template). Default is 'generate_commit_message'.")
+    ],
+    provider: Annotated[
+        str,
+        Field(default="deepseek", description="The LLM provider to use for processing. Supported values: 'opengpt' (OpenGPT API) or 'deepseek' (DeepSeek API). Requires corresponding API key environment variable (OPENGPT_API_KEY or DEEPSEEK_API_KEY). Default is 'deepseek'.")
+    ],
+    model: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional model name to override the default model for the selected provider. If not provided, uses the default model for the provider (deepseek-chat for DeepSeek, gpt-4.1-mini for OpenGPT) or the value from provider-specific environment variable (DEEPSEEK_MODEL or OPENGPT_MODEL).")
+    ],
+    system_prompt: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional custom system prompt to override the default. If provided, this will be used instead of the default system prompt. For combo_plan action, this can customize how the LLM generates execution plans.")
+    ],
+    user_prompt: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional custom user prompt to override the default. If provided, this will be used instead of the default user prompt. This allows fine-tuning the exact instructions given to the LLM.")
+    ],
+    prompt_profile: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional predefined prompt profile to use. Supported values: 'software_engineering', 'devops', 'product_analysis', 'documentation', 'data_analysis'. Each profile provides specialized system and user prompts tailored to different use cases. If both prompt_profile and custom prompts (system_prompt/user_prompt) are provided, custom prompts take precedence.")
+    ],
+    diff_scope: Annotated[
+        str,
+        Field(default="staged", description="The scope of Git diff to collect for context. Supported values: 'staged' (git diff --cached, default), 'workspace' (git diff, working directory changes), or 'head' (git diff HEAD, changes since HEAD). Default is 'staged'.")
+    ],
+    diff_target: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional Git reference (commit hash, branch name, or tag) to compare against when diff_scope is 'head'. If not provided and diff_scope is 'head', defaults to 'HEAD'. Ignored for other diff_scope values.")
+    ],
+    include_readme: Annotated[
+        bool,
+        Field(default=True, description="Whether to include the repository README file content as context. The README is truncated to max_readme_chars if provided. Helps the LLM understand project context and conventions. Default is True.")
+    ],
+    include_diff: Annotated[
+        bool,
+        Field(default=True, description="Whether to include Git diff output as context. The diff is truncated to max_diff_chars if provided. This is the primary source of change information for generating commit messages. Default is True.")
+    ],
+    include_status: Annotated[
+        bool,
+        Field(default=True, description="Whether to include Git status output as context. The status is truncated to max_status_chars if provided. Provides information about untracked files and branch state. Default is True.")
+    ],
+    max_readme_chars: Annotated[
+        int,
+        Field(default=4000, description="Maximum number of characters to include from the README file. If the README exceeds this limit, it will be truncated. This helps manage token usage while preserving important context. Default is 4000 characters.")
+    ],
+    max_diff_chars: Annotated[
+        int,
+        Field(default=8000, description="Maximum number of characters to include from the Git diff output. If the diff exceeds this limit, it will be truncated. Larger diffs may provide more context but increase token costs. Default is 8000 characters.")
+    ],
+    max_status_chars: Annotated[
+        int,
+        Field(default=2000, description="Maximum number of characters to include from the Git status output. If the status exceeds this limit, it will be truncated. Default is 2000 characters.")
+    ],
+    extra_context: Annotated[
+        Optional[str],
+        Field(default=None, description="Optional additional context string to include in the prompt. Useful for providing requirements descriptions, issue links, or other contextual information that helps the LLM generate better output. This context is appended to the constructed prompt.")
+    ],
+    temperature: Annotated[
+        float,
+        Field(default=0.2, description="Temperature parameter for the LLM (controls randomness). Value must be between 0.0 and 2.0. Lower values (e.g., 0.2) produce more deterministic, focused outputs. Higher values (e.g., 0.8-1.0) produce more creative, varied outputs. Default is 0.2 for consistent commit message generation.")
+    ],
+    timeout_sec: Annotated[
+        int,
+        Field(default=120, description="Maximum time in seconds to wait for the LLM API response. If the request exceeds this timeout, it will fail with a timeout error. Default is 120 seconds.")
+    ],
+    combo_name: Annotated[
+        Optional[str],
+        Field(default=None, description="Required when action is 'combo_plan'. Specifies the name of the Git combo command template to use. The combo template defines a sequence of Git commands with placeholders that need to be filled. See git_combos module for available combo templates.")
+    ],
+    combo_replacements: Annotated[
+        Optional[Dict[str, str]],
+        Field(default=None, description="Optional dictionary of placeholder replacements for combo_plan action. Keys are placeholder names from the combo template (e.g., 'branch', 'remote'), values are the actual values to substitute. If not provided or if some placeholders remain unfilled, the LLM will be asked to complete them based on the context.")
+    ],
 ) -> str:
-    """Expose git workflow automations powered by external LLM providers."""
+    """Expose git workflow automations powered by external LLM providers.
+    
+    This tool uses LLM providers (DeepSeek or OpenGPT) to generate commit messages
+    or execution plans based on repository context, Git changes, and custom prompts.
+    It automatically collects README content, Git diffs, and status information to
+    provide rich context for the LLM.
+    
+    Returns a JSON string with exit_code (0 for success, non-zero for errors),
+    stdout (the generated content), stderr (error messages if any), and details
+    (metadata about the provider, model, and scope used).
+    """
 
     payload = GitFlowInput(
         repo_path=repo_path,
