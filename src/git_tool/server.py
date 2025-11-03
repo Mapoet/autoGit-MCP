@@ -3,8 +3,6 @@
 The implementation follows the guidelines laid out in ``guide.md`` and the
 accompanying documentation under ``docs/``.
 """
-from __future__ import annotations
-
 import json
 import os
 import shlex
@@ -14,13 +12,14 @@ import urllib.request
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from mcp.server.fastapi import FastAPIMCPServer
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, validator
 
 from .git_combos import Combo, get_combo
 from .prompt_profiles import PROMPT_PROFILE_TEMPLATES, PromptProfile
 
-app, server = FastAPIMCPServer("git-mcp")
+server = FastMCP("git-mcp")
+app = server.streamable_http_app()
 
 
 class Cmd(str, Enum):
@@ -497,7 +496,7 @@ def _run_git(repo: str, argv: List[str], timeout: int) -> Dict[str, Any]:
 def git(
     repo_path: str,
     cmd: str,
-    args: Dict[str, Any] | None = None,
+    args: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
     allow_destructive: bool = False,
     timeout_sec: int = 120,
@@ -947,10 +946,52 @@ def _handle_git_flow(payload: GitFlowInput) -> Dict[str, Any]:
 
 
 @server.tool()
-def git_flow(**kwargs: Any) -> str:
+def git_flow(
+    repo_path: str,
+    action: str = "generate_commit_message",
+    provider: str = "opengpt",
+    model: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    user_prompt: Optional[str] = None,
+    prompt_profile: Optional[str] = None,
+    diff_scope: str = "staged",
+    diff_target: Optional[str] = None,
+    include_readme: bool = True,
+    include_diff: bool = True,
+    include_status: bool = True,
+    max_readme_chars: int = 4000,
+    max_diff_chars: int = 8000,
+    max_status_chars: int = 2000,
+    extra_context: Optional[str] = None,
+    temperature: float = 0.2,
+    timeout_sec: int = 120,
+    combo_name: Optional[str] = None,
+    combo_replacements: Optional[Dict[str, str]] = None,
+) -> str:
     """Expose git workflow automations powered by external LLM providers."""
 
-    payload = GitFlowInput(**kwargs)
+    payload = GitFlowInput(
+        repo_path=repo_path,
+        action=FlowAction(action),
+        provider=FlowProvider(provider),
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        prompt_profile=PromptProfile(prompt_profile) if prompt_profile else None,
+        diff_scope=DiffScope(diff_scope),
+        diff_target=diff_target,
+        include_readme=include_readme,
+        include_diff=include_diff,
+        include_status=include_status,
+        max_readme_chars=max_readme_chars,
+        max_diff_chars=max_diff_chars,
+        max_status_chars=max_status_chars,
+        extra_context=extra_context,
+        temperature=temperature,
+        timeout_sec=timeout_sec,
+        combo_name=combo_name,
+        combo_replacements=combo_replacements or {},
+    )
     try:
         result = _handle_git_flow(payload)
     except Exception as exc:  # noqa: BLE001 - surfaced to clients as structured error
