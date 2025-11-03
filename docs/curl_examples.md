@@ -6,12 +6,12 @@
 
 1. 确保 MCP 服务器正在运行：
 ```bash
-uvicorn src.git_tool.server:app --reload --port 9010
+uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 ```
 
 2. 服务器端点：
    - **REST API（推荐，无需 session ID）**: `http://localhost:9010/api`
-   - **MCP SSE 端点（需要 session ID）**: `http://localhost:9010/mcp/`
+   - **MCP SSE 端点（需要 session ID）**: `http://localhost:9010/mcp/`（注意尾斜杠）
 
 ## ⭐ 推荐：使用 REST API（无需 session ID）
 

@@ -95,10 +95,10 @@ export GITEE_TOKEN="your-gitee-personal-access-token"       # 必填（访问私
 ### 3. 启动 MCP Server
 
 ```bash
-uvicorn src.git_tool.server:app --reload --port 9010
+uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 ```
 
-服务器启动后，默认监听 `http://localhost:9010/mcp`。
+服务器启动后，MCP 端点为 `http://localhost:9010/mcp/`（注意尾斜杠）。
 
 ### 4. 配置 MCP 客户端
 
@@ -108,7 +108,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 {
   "mcpServers": {
     "git-mcp": {
-      "url": "http://localhost:9010/mcp"
+      "url": "http://localhost:9010/mcp/"
     }
   }
 }
