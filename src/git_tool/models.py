@@ -199,7 +199,18 @@ class WorkLogInput(BaseModel):
     @field_validator("days")
     @classmethod
     def _positive_days(cls, value: Optional[int]) -> Optional[int]:
-        if value is not None and value <= 0:
+        if value is None:
+            return None
+        # 处理字符串形式的数字（MCP JSON-RPC 可能传递字符串）
+        if isinstance(value, str):
+            try:
+                value = int(value)
+            except (ValueError, TypeError):
+                raise ValueError(f"days 必须是正整数，收到: {value} (类型: {type(value).__name__})")
+        # 确保是整数
+        if not isinstance(value, int):
+            raise ValueError(f"days 必须是整数，收到: {value} (类型: {type(value).__name__})")
+        if value <= 0:
             raise ValueError("days must be positive")
         return value
 

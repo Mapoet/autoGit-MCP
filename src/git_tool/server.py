@@ -8,6 +8,7 @@ import subprocess
 import urllib.error
 from typing import Annotated, Any, Dict, Optional
 
+from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
@@ -26,7 +27,111 @@ from .models import (
 )
 
 server = FastMCP("git-mcp")
-app = server.streamable_http_app()
+# SSE 模式（用于标准 MCP 客户端，需要 session ID）
+mcp_app = server.streamable_http_app()
+
+# 添加简单的 REST API（无需 session ID，用于直接 HTTP 调用）
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+rest_router = APIRouter(prefix="/api", tags=["REST API"])
+
+
+@rest_router.post("/git")
+async def rest_git(request: Request):
+    """REST API 端点：调用 git 工具（无需 session ID）"""
+    try:
+        body = await request.json()
+        # 确保所有必需参数都有默认值
+        result = git(
+            repo_path=body.get("repo_path"),
+            cmd=body.get("cmd"),
+            args=body.get("args", {}),
+            dry_run=body.get("dry_run", False),
+            allow_destructive=body.get("allow_destructive", False),
+            timeout_sec=body.get("timeout_sec", 120),
+        )
+        result_dict = json.loads(result)
+        return JSONResponse(content=result_dict)
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={"exit_code": 1, "stdout": "", "stderr": f"错误: {str(e)}\n{traceback.format_exc()[-300:]}"}
+        )
+
+
+@rest_router.post("/git_flow")
+async def rest_git_flow(request: Request):
+    """REST API 端点：调用 git_flow 工具（无需 session ID）"""
+    try:
+        body = await request.json()
+        # 直接传递所有参数（git_flow 函数会处理默认值）
+        result = git_flow(**body)
+        result_dict = json.loads(result)
+        return JSONResponse(content=result_dict)
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={"exit_code": 1, "stdout": "", "stderr": f"错误: {str(e)}\n{traceback.format_exc()[-300:]}"}
+        )
+
+
+@rest_router.post("/work_log")
+async def rest_work_log(request: Request):
+    """REST API 端点：调用 work_log 工具（无需 session ID）"""
+    try:
+        body = await request.json()
+        # work_log 函数需要所有参数，提供默认值
+        result = work_log(
+            repo_paths=body.get("repo_paths"),
+            github_repos=body.get("github_repos"),
+            gitee_repos=body.get("gitee_repos"),
+            since=body.get("since"),
+            until=body.get("until"),
+            days=body.get("days"),
+            author=body.get("author"),
+            session_gap_minutes=body.get("session_gap_minutes", 60),
+            title=body.get("title"),
+            add_summary=body.get("add_summary", False),
+            provider=body.get("provider", "deepseek"),
+            model=body.get("model"),
+            system_prompt=body.get("system_prompt"),
+            temperature=body.get("temperature", 0.3),
+        )
+        result_dict = json.loads(result)
+        return JSONResponse(content=result_dict)
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={"exit_code": 1, "stdout": "", "stderr": f"错误: {str(e)}\n{traceback.format_exc()[-300:]}"}
+        )
+
+
+@rest_router.get("/tools")
+async def rest_list_tools():
+    """REST API 端点：列出所有可用工具"""
+    return JSONResponse(content={
+        "tools": [
+            {"name": "git", "endpoint": "/api/git"},
+            {"name": "git_flow", "endpoint": "/api/git_flow"},
+            {"name": "work_log", "endpoint": "/api/work_log"}
+        ]
+    })
+
+
+# 合并应用：将 MCP 子应用作为顶层（其内部管理 lifespan），在 /api 挂载 REST 应用
+from fastapi import FastAPI
+
+# 1) MCP 作为顶层（其自身暴露 /mcp 路由）
+app = mcp_app
+
+# 2) 在 /api 挂载独立 REST 应用
+rest_api_app = FastAPI(title="Git MCP REST API")
+rest_api_app.include_router(rest_router)
+app.mount("/api", rest_api_app)
 
 
 @server.tool()
@@ -92,7 +197,7 @@ def git(
         payload = GitInput(
             repo_path=repo_path,
             cmd=Cmd(cmd),
-                args=args or {},  # 处理 None 或空字典的情况
+            args=args or {},
             dry_run=dry_run,
             allow_destructive=allow_destructive,
             timeout_sec=timeout_sec,
@@ -378,6 +483,14 @@ def work_log(
             "exit_code": 1,
             "stdout": "",
             "stderr": f"参数验证错误: {str(e)}",
+        })
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        return json.dumps({
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"work_log 工具执行错误: {type(e).__name__}: {str(e)}\n详细信息: {error_details[-500:]}",
         })
 
 
