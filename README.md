@@ -2,41 +2,194 @@
 
 `autoGit-MCP` 提供了将常见 Git 操作与辅助自动化能力封装为 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 工具的实现，便于在智能体或自动化工作流中安全地执行 Git 命令并生成提交说明。
 
-## 功能概览
+## ✨ 主要特性
 
-- **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `remote`、`stash`、`submodule` 等拓展指令。
+- **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `status`、`add`、`commit`、`pull`、`push`、`fetch`、`merge`、`rebase`、`diff`、`log`、`branch`、`switch`、`tag`、`reset`、`revert`、`clean`、`remote`、`stash`、`submodule`、`cherry-pick` 等命令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
-- **FastAPI MCP Server**：基于 `mcp.server.fastapi.FastAPIMCPServer` 暴露工具，便于与任意兼容 MCP 的客户端集成。
+- **FastMCP Server**：基于 `mcp.server.fastmcp.FastMCP` 暴露工具，使用 HTTP/SSE 协议，便于与任意兼容 MCP 的客户端集成。
+- **完善的错误处理**：所有工具都包含全面的异常捕获和友好的错误消息返回。
+- **代码结构优化**：采用关注点分离设计，接口定义与实现逻辑分离，便于维护和扩展。
 
 更多设计细节可参考仓库中的 [`docs/`](docs/) 与 [`guide.md`](guide.md)。
 
-## 快速开始
+## 🚀 快速开始
 
-1. **安装依赖**
+### 1. 安装依赖
 
-   ```bash
-   pip install -r requirements.txt  # 如果你使用的是隔离环境
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-   > 项目本身仅依赖标准库与 `mcp`，如需自定义可在环境中自行安装额外依赖。
+项目主要依赖：
+- `mcp` - Model Context Protocol 支持
+- `pydantic` (v2) - 数据验证
+- `fastapi` - HTTP 服务器框架
+- `uvicorn` - ASGI 服务器
 
-2. **启动 MCP Server**
+### 2. 配置环境变量（可选）
 
-   ```bash
-   uvicorn src.git_tool.server:app --reload --port 8000
-   ```
+如果使用 `git_flow` 工具，需要设置对应的 API Key：
 
-   服务器启动后即可通过 MCP 客户端（或直接以 HTTP/WebSocket）调用 `git` 与 `git_flow` 工具。
+```bash
+# DeepSeek (默认)
+export DEEPSEEK_API_KEY="your-api-key"
+export DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"  # 可选
+export DEEPSEEK_MODEL="deepseek-chat"  # 可选，默认值
 
-## `git_flow` 自动化能力
+# 或 OpenGPT
+export OPENGPT_API_KEY="your-api-key"
+export OPENGPT_API_URL="https://api.opengpt.com/v1/chat/completions"  # 可选
+export OPENGPT_MODEL="gpt-4.1-mini"  # 可选，默认值
+```
 
-`git_flow` 旨在将 Git 工作流中的“提交信息生成”等任务交给 LLM 处理，并且支持围绕文档中的 Git 组合命令为你定制执行计划。它会根据以下信息构造提示词：
+### 3. 启动 MCP Server
 
-- 自定义的 system prompt 与 user prompt（均为可选项）；
-- 仓库根目录下的 `README`（可通过参数控制是否包含，并支持字符数限制）；
-- 指定范围的 `git diff` 结果（支持暂存区、工作区、或与任意目标 commit 的 diff）；
-- 额外的上下文字符串（如需求描述、Issue 链接等）。
-- 选定的 Git 串行组合命令模板（当 `action` 为 `combo_plan` 时注入）。
+```bash
+uvicorn src.git_tool.server:app --reload --port 9010
+```
+
+服务器启动后，默认监听 `http://localhost:9010/mcp`。
+
+### 4. 配置 MCP 客户端
+
+在 Cursor 等 MCP 客户端中配置（通常为 `~/.cursor/mcp.json` 或客户端配置目录）：
+
+```json
+{
+  "mcpServers": {
+    "git-mcp": {
+      "url": "http://localhost:9010/mcp"
+    }
+  }
+}
+```
+
+重启客户端后，即可使用 `git` 和 `git_flow` 工具。
+
+## 📖 使用示例
+
+### `git` 工具
+
+#### 查看 Git 状态
+
+```json
+{
+  "repo_path": "/path/to/repo",
+  "cmd": "status",
+  "args": {},
+  "dry_run": false,
+  "allow_destructive": false,
+  "timeout_sec": 30
+}
+```
+
+#### 查看已暂存的差异
+
+```json
+{
+  "repo_path": "/path/to/repo",
+  "cmd": "diff",
+  "args": {
+    "cached": true
+  },
+  "dry_run": false,
+  "allow_destructive": false,
+  "timeout_sec": 30
+}
+```
+
+#### 查看最近提交记录
+
+```json
+{
+  "repo_path": "/path/to/repo",
+  "cmd": "log",
+  "args": {
+    "oneline": true,
+    "graph": false,
+    "max_count": 10
+  },
+  "dry_run": false,
+  "allow_destructive": false,
+  "timeout_sec": 30
+}
+```
+
+**重要提示**：`args` 参数必须传递一个字典对象（即使为空），不要使用 `null`。
+
+### `git_flow` 工具
+
+#### 生成提交信息
+
+```json
+{
+  "repo_path": "/path/to/repo",
+  "action": "generate_commit_message",
+  "provider": "deepseek",
+  "diff_scope": "staged",
+  "include_readme": true,
+  "max_diff_chars": 8000
+}
+```
+
+#### 生成组合命令执行计划
+
+```json
+{
+  "repo_path": "/path/to/repo",
+  "action": "combo_plan",
+  "combo_name": "safe_sync",
+  "combo_replacements": {
+    "branch": "main",
+    "remote": "origin"
+  }
+}
+```
+
+## 🏗️ 项目结构
+
+项目采用关注点分离的架构设计，接口定义与实现逻辑分离：
+
+```
+.
+├── README.md
+├── LICENSE
+├── guide.md
+├── docs/
+│   ├── code-structure.md          # 代码结构详细说明
+│   ├── git-cheatsheet.md          # Git 命令速查表
+│   ├── git_comb.md                # Git 组合命令说明
+│   ├── mcp-git-tool.md            # MCP Git 工具设计文档
+│   └── troubleshooting.md         # 故障排查指南
+└── src/git_tool/
+    ├── __init__.py                # 模块导出
+    ├── server.py                  # MCP 接口定义（仅包含 @server.tool() 装饰器）
+    ├── models.py                  # 数据模型（Pydantic V2）
+    ├── git_commands.py            # git 工具实现
+    ├── git_flow_commands.py       # git_flow 工具实现
+    ├── git_combos.py              # Git 组合命令模板
+    └── prompt_profiles.py        # 提示词配置模板
+```
+
+### 架构说明
+
+- **`server.py`**：仅包含 MCP 工具接口定义，不包含实现逻辑
+- **`models.py`**：所有数据模型和验证规则（使用 Pydantic V2）
+- **`git_commands.py`**：git 工具的所有实现逻辑和异常处理
+- **`git_flow_commands.py`**：git_flow 工具的所有实现逻辑和 LLM 调用
+
+详细的代码结构说明请参考 [`docs/code-structure.md`](docs/code-structure.md)。
+
+## 🔧 `git_flow` 自动化能力
+
+`git_flow` 旨在将 Git 工作流中的"提交信息生成"等任务交给 LLM 处理，并且支持围绕文档中的 Git 组合命令为你定制执行计划。它会根据以下信息构造提示词：
+
+- 自定义的 system prompt 与 user prompt（均为可选项）
+- 仓库根目录下的 `README`（可通过参数控制是否包含，并支持字符数限制）
+- 指定范围的 `git diff` 结果（支持暂存区、工作区、或与任意目标 commit 的 diff）
+- Git 状态信息（`git status`）
+- 额外的上下文字符串（如需求描述、Issue 链接等）
+- 选定的 Git 串行组合命令模板（当 `action` 为 `combo_plan` 时注入）
 
 > 默认会针对暂存区（`git diff --cached`）收集变更，并使用一个符合 Conventional Commits 的示例 Prompt 作为模板。
 
@@ -59,21 +212,28 @@
 {
   "repo_path": "/path/to/repo",
   "action": "generate_commit_message",  // 或 "combo_plan"
-  "provider": "opengpt" | "deepseek",
-  "model": "可选模型名",
+  "provider": "opengpt" | "deepseek",   // 默认 "deepseek"
+  "model": "可选模型名",                  // 覆盖默认模型
   "system_prompt": "可选 system prompt",
   "user_prompt": "可选 user prompt",
   "prompt_profile": "software_engineering" | "devops" | "product_analysis" | "documentation" | "data_analysis",
-  "diff_scope": "staged" | "workspace" | "head",
-  "diff_target": "HEAD" // 当 diff_scope 为 head 时使用，默认 HEAD,
-  "include_readme": true,
-  "max_readme_chars": 4000,
-  "max_diff_chars": 8000,
+  "diff_scope": "staged" | "workspace" | "head",  // 默认 "staged"
+  "diff_target": "HEAD",                 // 当 diff_scope 为 head 时使用，默认 HEAD
+  "include_readme": true,                // 默认 true
+  "include_diff": true,                  // 默认 true
+  "include_status": true,                // 默认 true
+  "max_readme_chars": 4000,              // 默认 4000
+  "max_diff_chars": 8000,                // 默认 8000
+  "max_status_chars": 2000,              // 默认 2000
   "extra_context": "其他上下文",
-  "temperature": 0.2,
+  "temperature": 0.2,                   // 默认 0.2，范围 0.0-2.0
+  "timeout_sec": 120,                    // 默认 120
   // --- combo_plan 专用字段 ---
-  "combo_name": "safe_sync",            // action 为 combo_plan 时必填
-  "combo_replacements": { "branch": "main" } // 可选占位符替换，缺省时会在提示词中保留占位符交由模型补全
+  "combo_name": "safe_sync",             // action 为 combo_plan 时必填
+  "combo_replacements": {                // 可选占位符替换
+    "branch": "main",
+    "remote": "origin"
+  }
 }
 ```
 
@@ -88,196 +248,87 @@
     "provider": "opengpt",
     "model": "gpt-4.1-mini",
     "diff_scope": "staged",
-    "combo": "safe_sync" // combo_plan 动作会包含该字段
+    "endpoint": "https://api.opengpt.com/v1/chat/completions",
+    "combo": "safe_sync"  // combo_plan 动作会包含该字段
   }
 }
 ```
 
-若调用模型失败，`stderr` 会包含错误描述，同时 `exit_code` 为非零值。无论 `action` 类型如何，均可通过 `system_prompt` 与 `user_prompt` 覆盖默认提示词，从而让模型输出自定义的占位符填充策略、冲突处理建议或额外的安全提醒。
+若调用模型失败，`stderr` 会包含错误描述，同时 `exit_code` 为非零值。错误信息会根据失败类型提供具体的提示（如 API 密钥未设置、网络连接错误、Git 操作错误等）。
 
-## 提示词模板
+## 📝 提示词模板
 
 项目内置了以下默认模板（可通过参数覆盖）：
 
 - **System Prompt**：`"You are an experienced software engineer who writes Conventional Commits."`
 - **User Prompt**：`"请基于以下项目上下文与 diff，生成一条简洁的 Conventional Commit 信息，并给出简短的正文说明。"`
 
-当 `action` 设为 `combo_plan` 时，会默认使用专为 Git 串行组合命令设计的提示词，生成包含“适用场景、逐步说明、脚本模板”的执行指南；你也可以通过 `system_prompt` 与 `user_prompt` 自定义文案风格，或直接设置 `prompt_profile` 选择内置模板（当同时提供自定义 Prompt 时优先使用自定义内容）。
+当 `action` 设为 `combo_plan` 时，会默认使用专为 Git 串行组合命令设计的提示词，生成包含"适用场景、逐步说明、脚本模板"的执行指南；你也可以通过 `system_prompt` 与 `user_prompt` 自定义文案风格，或直接设置 `prompt_profile` 选择内置模板（当同时提供自定义 Prompt 时优先使用自定义内容）。
 
-调用时会自动在用户提示尾部附加 README 摘要与 Git Diff 内容。
+### 预设提示词模板
 
-### 不同专业领域的提示词模板
+项目提供了以下专业领域的提示词模板，可通过 `prompt_profile` 参数使用：
 
-为了满足不同角色、任务与工作场景的需求，你可以在调用 `git_flow` 时设置 `prompt_profile` 字段来注入下列模板，也可以手动拷贝后自定义。所有模板均提供了需要在调用前渲染的占位符，便于传入关键上下文：
+1. **`software_engineering`** - 软件工程（实现 / 重构 / 缺陷修复）
+2. **`devops`** - DevOps / 运维自动化
+3. **`product_analysis`** - 产品 / 需求分析
+4. **`documentation`** - 文档与知识库维护
+5. **`data_analysis`** - 数据分析 / 指标洞察
 
-- `{{repo_summary}}`：当前仓库或子模块的简要描述，可由 README 摘要或人工撰写。
-- `{{task_description}}`：本次需求、缺陷或目标的说明。
-- `{{diff_snippet}}`：与任务相关的 Git Diff 片段，可结合 `max_diff_chars` 控制长度。
-- `{{risk_notice}}`：潜在风险、兼容性或上线限制信息（可选）。
-- `{{desired_output}}`：期待的输出形态，例如“生成 Conventional Commit + 说明”或“列出执行步骤”。
+详细的模板内容请参考 [`src/git_tool/prompt_profiles.py`](src/git_tool/prompt_profiles.py)。
 
-> 你可以按需增删占位符，并在发起 MCP 请求前自行替换为实际内容；若保留未替换的占位符，模型会尝试基于上下文补全。
+## 🛡️ 安全特性
 
-#### 1. 软件工程（实现 / 重构 / 缺陷修复）
+### 危险命令防护
 
-- **System Prompt**
+默认情况下，以下危险命令需要显式设置 `allow_destructive: true` 才能执行：
 
-  ```text
-  You are a senior software engineer specializing in Git-based workflows. Produce safe, review-ready outputs, call out risks, and respect repository conventions surfaced in the context.
-  ```
+- `reset --hard` - 硬重置
+- `clean -fd` - 强制清理未跟踪文件
+- `push --force` - 强制推送
+- `stash drop` / `stash clear` - 删除 stash
+- 其他可能导致数据丢失的操作
 
-- **User Prompt**
+### Dry Run 模式
 
-  ```text
-  项目概览：
-  {{repo_summary}}
+对于以下命令支持 `dry_run: true` 预览执行计划：
 
-  任务目标：
-  {{task_description}}
+- `commit`
+- `merge`
+- `reset`
+- `revert`
+- `clean`
 
-  相关变更：
-  {{diff_snippet}}
+## ⚠️ 错误处理
 
-  风险 / 兼容性提示：
-  {{risk_notice}}
+所有工具都包含完善的错误处理机制：
 
-  请基于以上信息，输出 {{desired_output}}，并确保：
-  1. 给出必要的代码上下文解释；
-  2. 指出可能的副作用与测试建议；
-  3. 若发现不一致或潜在问题，请明确标注并提出修正思路。
-  ```
+- **参数验证错误**：提供清晰的错误消息，指出哪个参数无效
+- **命令执行错误**：返回 Git 命令的 stdout 和 stderr
+- **超时错误**：可配置超时时间，超时时返回明确提示
+- **网络错误**：区分 HTTP 错误和连接错误
+- **API 密钥错误**：提示需要设置的环境变量
 
-#### 2. DevOps / 运维自动化
+详细错误处理说明请参考 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
 
-- **System Prompt**
+## 🔄 版本更新
 
-  ```text
-  You are a DevOps specialist focused on reliable delivery, CI/CD, and infrastructure automation. Emphasize reproducibility, rollback safety, and observability practices.
-  ```
+### 最新改进（v1.1）
 
-- **User Prompt**
+- ✅ **代码重构**：分离接口定义与实现逻辑，提高代码可维护性
+- ✅ **Pydantic V2 迁移**：所有验证器已迁移到 Pydantic V2（`@field_validator` 和 `@model_validator`）
+- ✅ **参数类型修复**：修复 `args` 参数类型问题，使用 `dict` 替代 `Optional[Dict[str, Any]]`
+- ✅ **完善的错误处理**：为所有工具添加了分类异常处理和友好的错误消息
+- ✅ **文档优化**：整理并优化文档结构，移除临时文档
 
-  ```text
-  当前服务与仓库信息：
-  {{repo_summary}}
+## 📚 文档
 
-  运维 / 部署任务：
-  {{task_description}}
+- [`docs/code-structure.md`](docs/code-structure.md) - 代码结构详细说明
+- [`docs/git-cheatsheet.md`](docs/git-cheatsheet.md) - Git 命令速查表
+- [`docs/git_comb.md`](docs/git_comb.md) - Git 组合命令说明
+- [`docs/mcp-git-tool.md`](docs/mcp-git-tool.md) - MCP Git 工具设计文档
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) - 故障排查指南
 
-  配置或脚本差异：
-  {{diff_snippet}}
-
-  约束与风险：
-  {{risk_notice}}
-
-  请产出 {{desired_output}}，需包含：
-  - 环境或流水线的更新步骤；
-  - 监控与验证建议；
-  - 回滚策略或故障预案。
-  ```
-
-#### 3. 产品 / 需求分析
-
-- **System Prompt**
-
-  ```text
-  You are a product strategist skilled at translating business requirements into actionable engineering guidance. Balance user value, feasibility, and measurable outcomes.
-  ```
-
-- **User Prompt**
-
-  ```text
-  产品背景：
-  {{repo_summary}}
-
-  当前需求与痛点：
-  {{task_description}}
-
-  相关实现或差异：
-  {{diff_snippet}}
-
-  业务限制 / 风险说明：
-  {{risk_notice}}
-
-  请围绕 {{desired_output}} 进行分析，需包含：
-  1. 用户价值与成功指标；
-  2. 方案可行性评估（含依赖与影响范围）；
-  3. 对后续迭代或验证的建议。
-  ```
-
-#### 4. 文档与知识库维护
-
-- **System Prompt**
-
-  ```text
-  You are a technical writer who keeps engineering knowledge bases consistent, concise, and accessible. Maintain tone alignment with existing documentation.
-  ```
-
-- **User Prompt**
-
-  ```text
-  文档上下文：
-  {{repo_summary}}
-
-  更新目标：
-  {{task_description}}
-
-  内容差异或待整合信息：
-  {{diff_snippet}}
-
-  注意事项：
-  {{risk_notice}}
-
-  请输出 {{desired_output}}，并确保：
-  - 用词统一且符合既有术语；
-  - 给出必要的交叉引用或链接建议；
-  - 标注需要人工确认的部分。
-  ```
-
-#### 5. 数据分析 / 指标洞察
-
-- **System Prompt**
-
-  ```text
-  You are a data analyst experienced in experimental design, metrics interpretation, and communicating insights to mixed audiences.
-  ```
-
-- **User Prompt**
-
-  ```text
-  数据集与项目背景：
-  {{repo_summary}}
-
-  分析诉求：
-  {{task_description}}
-
-  代码 / 笔记本差异：
-  {{diff_snippet}}
-
-  潜在风险或数据质量提示：
-  {{risk_notice}}
-
-  请生成 {{desired_output}}，需要：
-  - 概述关键发现与指标波动；
-  - 指出假设、前提条件与可能的偏差；
-  - 给出下一步验证或可视化建议。
-  ```
-
-## 目录结构
-
-```
-.
-├── README.md
-├── LICENSE
-├── guide.md
-├── docs/
-│   ├── git-cheatsheet.md
-│   └── mcp-git-tool.md
-└── src/git_tool/
-    ├── __init__.py
-    └── server.py
-```
-
-## 许可协议
+## 📄 许可协议
 
 本项目遵循 [MIT License](LICENSE)。
