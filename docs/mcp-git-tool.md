@@ -182,6 +182,100 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 可额外暴露工具 `gen_commit_message`：先调用 `git diff` 收集改动，再利用 LLM 生成符合团队规范的提交信息，与 `git` 工具结合形成自动提交流程。
 
+## `work_log` 工作日志工具
+
+除了 `git` 和 `git_flow`，项目还提供了 `work_log` 工具，用于从本地仓库、GitHub 或 Gitee 收集提交记录并生成结构化工作日志。
+
+### 功能特性
+
+- **多数据源支持**：
+  - 本地仓库路径列表（`repo_paths`）
+  - GitHub 仓库列表（`github_repos`，格式：`OWNER/REPO`）
+  - Gitee 仓库列表（`gitee_repos`，格式：`OWNER/REPO`）
+- **时间范围**：
+  - 支持 ISO 格式或 `YYYY-MM-DD` 格式的起始/结束时间
+  - 支持指定最近 N 天（`days` 参数）
+- **工作会话分析**：
+  - 自动计算工作会话（基于提交时间间隔，默认 60 分钟）
+  - 在多项目模式下检测并行工作时间段
+  - 识别跨项目的同步工作时间
+- **AI 总结生成**：
+  - 可选使用 DeepSeek 或 OpenAI 生成中文工作总结
+  - 支持自定义系统提示词和温度参数
+  - 自动包含工作会话统计和并行工作时间信息
+
+### 输入 Schema
+
+```jsonc
+{
+  "repo_paths": ["/path/to/repo"],      // 本地仓库路径列表（可选）
+  "github_repos": ["owner/repo"],       // GitHub 仓库列表（可选）
+  "gitee_repos": ["owner/repo"],        // Gitee 仓库列表（可选）
+  "since": "2024-11-01",                // 起始时间（ISO 或 YYYY-MM-DD，可选）
+  "until": "2024-11-07",                // 结束时间（ISO 或 YYYY-MM-DD，可选）
+  "days": 7,                            // 最近 N 天（覆盖 since/until，可选）
+  "author": "John Doe",                 // 作者过滤（可选）
+  "session_gap_minutes": 60,            // 工作会话间隔（分钟，默认 60）
+  "title": "Work Log",                  // 日志标题（可选）
+  "add_summary": false,                 // 是否生成 AI 总结（默认 false）
+  "provider": "deepseek",               // AI 提供者：openai 或 deepseek
+  "model": "deepseek-chat",             // 模型名称（可选）
+  "system_prompt": "...",               // 自定义系统提示词（可选）
+  "temperature": 0.3                     // 温度参数（0.0-2.0，默认 0.3）
+}
+```
+
+### 输出 Schema
+
+```jsonc
+{
+  "exit_code": 0,
+  "stdout": "# Work Log\n\n## 2024-11-01 (5 commits)\n...",  // Markdown 格式工作日志
+  "stderr": ""
+}
+```
+
+`stdout` 包含完整的 Markdown 格式工作日志，包括：
+- 按日期分组的提交列表
+- 每个提交的统计信息（文件、增删行数）
+- 工作会话统计（单项目模式）
+- 跨项目并行工作时间统计（多项目模式）
+- AI 生成的工作总结（如果启用了 `add_summary`）
+
+### 环境变量
+
+- `DEEPSEEK_API_KEY` - DeepSeek API Key（用于 AI 总结）
+- `OPENAI_API_KEY` - OpenAI API Key（用于 AI 总结）
+- `GITHUB_TOKEN` - GitHub Personal Access Token（访问 GitHub 仓库）
+- `GITEE_TOKEN` - Gitee Personal Access Token（访问 Gitee 仓库）
+
+### 使用示例
+
+#### 单项目工作日志
+
+```json
+{
+  "repo_paths": ["/path/to/repo"],
+  "days": 7,
+  "author": "John Doe",
+  "add_summary": true
+}
+```
+
+#### 多项目工作日志（包含远程仓库）
+
+```json
+{
+  "repo_paths": ["/path/to/local/repo"],
+  "github_repos": ["owner/repo1", "owner/repo2"],
+  "since": "2024-11-01",
+  "until": "2024-11-07",
+  "session_gap_minutes": 60,
+  "add_summary": true,
+  "provider": "deepseek"
+}
+```
+
 ---
 
 更多最佳实践请参考 [Git 常用命令速查](git-cheatsheet.md)。

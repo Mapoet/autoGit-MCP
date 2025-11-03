@@ -8,9 +8,10 @@
 src/git_tool/
 ├── __init__.py          # 模块导出
 ├── server.py            # MCP 接口定义（只包含 @server.tool() 装饰器）
-├── models.py            # 数据模型定义（Cmd, GitInput, FlowAction 等）
+├── models.py            # 数据模型定义（Cmd, GitInput, FlowAction, WorkLogInput 等）
 ├── git_commands.py      # git 工具的实现逻辑
 ├── git_flow_commands.py # git_flow 工具的实现逻辑
+├── git_worklog_commands.py # work_log 工具的实现逻辑
 ├── git_combos.py        # Git 组合命令模板（已存在）
 └── prompt_profiles.py  # 提示词配置文件（已存在）
 ```
@@ -44,6 +45,8 @@ src/git_tool/
 - `FlowProvider` - LLM 提供者枚举
 - `DiffScope` - diff 范围枚举
 - `GitFlowInput` - git_flow 工具的输入模型
+- `WorkLogProvider` - work_log AI 提供者枚举
+- `WorkLogInput` - work_log 工具的输入模型
 
 ### `git_commands.py` - git 工具实现
 
@@ -72,12 +75,33 @@ src/git_tool/
 - `_handle_git_flow` - 执行 git_flow 操作的核心逻辑
 - `execute_git_flow_command` - 主要执行函数，包含完整的异常处理
 
+### `git_worklog_commands.py` - work_log 工具实现
+
+**职责**：
+- 实现本地仓库提交收集（`_get_commits_between`）
+- 实现远程仓库提交收集（GitHub/Gitee）
+- 实现工作会话计算（`_compute_work_sessions`）
+- 实现并行工作时间检测（`_detect_parallel_sessions`）
+- 实现 AI 总结生成（`_generate_summary_with_llm`）
+- 实现 Markdown 渲染（单项目/多项目模式）
+- 实现 `execute_work_log_command` 函数（主要入口，包含异常处理）
+
+**关键函数**：
+- `_get_commits_between` - 从本地仓库获取指定时间范围的提交
+- `_get_github_events` / `_get_gitee_events` - 从远程仓库获取提交
+- `_get_commit_numstat` - 获取提交的统计信息（文件、增删行数）
+- `_compute_work_sessions` - 基于提交时间计算工作会话
+- `_detect_parallel_sessions` - 检测跨项目的并行工作时间段
+- `_generate_summary_with_llm` - 使用 LLM 生成工作总结
+- `_render_markdown_worklog` / `_render_multi_project_worklog` - 渲染 Markdown 格式的工作日志
+- `execute_work_log_command` - 主要执行函数，包含完整的异常处理
+
 ## 代码组织优势
 
 ### 1. 关注点分离
 
 - **接口层**（`server.py`）：专注于 MCP 协议和接口定义
-- **业务层**（`git_commands.py`, `git_flow_commands.py`）：专注于业务逻辑实现
+- **业务层**（`git_commands.py`, `git_flow_commands.py`, `git_worklog_commands.py`）：专注于业务逻辑实现
 - **数据层**（`models.py`）：专注于数据模型和验证
 
 ### 2. 易于维护
@@ -90,6 +114,7 @@ src/git_tool/
 
 - 新增 Git 命令：只需在 `git_commands.py` 中添加新的映射函数
 - 新增 git_flow 操作：只需在 `git_flow_commands.py` 中扩展
+- 新增 work_log 功能：只需在 `git_worklog_commands.py` 中扩展
 - 新增数据模型：在 `models.py` 中添加
 
 ### 4. 可测试性
@@ -104,11 +129,15 @@ src/git_tool/
 server.py
   ├── models.py (数据模型)
   ├── git_commands.py (git 实现)
-  └── git_flow_commands.py (git_flow 实现)
-        ├── git_commands.py (使用 run_git)
+  ├── git_flow_commands.py (git_flow 实现)
+  │     ├── git_commands.py (使用 run_git)
+  │     ├── models.py (使用数据模型)
+  │     ├── git_combos.py (组合命令模板)
+  │     └── prompt_profiles.py (提示词配置)
+  └── git_worklog_commands.py (work_log 实现)
         ├── models.py (使用数据模型)
-        ├── git_combos.py (组合命令模板)
-        └── prompt_profiles.py (提示词配置)
+        ├── GitPython (使用 Repo)
+        └── requests (GitHub/Gitee API)
 ```
 
 ## 使用示例
@@ -137,7 +166,7 @@ print(result)  # JSON 字符串
 ### 通过 MCP 接口调用（生产环境）
 
 ```python
-from src.git_tool.server import git, git_flow
+from src.git_tool.server import git, git_flow, work_log
 
 # 通过 MCP 工具调用
 result = git(
@@ -145,16 +174,24 @@ result = git(
     cmd="status",
     args={}
 )
+
+# 生成工作日志
+work_log_result = work_log(
+    repo_paths=["/path/to/repo"],
+    days=7,
+    add_summary=True
+)
 ```
 
 ## 重构历史
 
 - **重构前**：所有代码都在 `server.py` 中（1266 行）
 - **重构后**：
-  - `server.py` - 约 200 行（仅接口定义）
-  - `models.py` - 约 130 行（数据模型）
+  - `server.py` - 约 400 行（仅接口定义，包含三个工具）
+  - `models.py` - 约 210 行（数据模型，包含 WorkLogInput）
   - `git_commands.py` - 约 480 行（git 实现）
   - `git_flow_commands.py` - 约 530 行（git_flow 实现）
+  - `git_worklog_commands.py` - 约 1000 行（work_log 实现）
 
 ## 注意事项
 

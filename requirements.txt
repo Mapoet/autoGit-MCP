@@ -1,0 +1,23 @@
+# Core dependencies (required)
+mcp>=1.0.0                    # Model Context Protocol support (includes FastAPI)
+pydantic>=2.0.0               # Data validation (v2)
+uvicorn[standard]>=0.27.0     # ASGI server for FastMCP
+
+# Git operations (required for work_log tool)
+GitPython>=3.1.40             # Git repository operations
+requests>=2.31.0              # HTTP requests for GitHub/Gitee API
+
+# Optional dependencies for LLM providers
+# Install based on which provider you plan to use:
+
+# For OpenAI support (work_log tool)
+# Only needed if using OpenAI provider for work_log AI summary
+openai>=1.0.0                 # OpenAI API client
+
+# For GitHub support (work_log tool)
+# Only needed if accessing GitHub repositories in work_log
+PyGithub>=2.0.0              # GitHub API client
+
+# Note: Gitee support uses requests library (already included above)
+# Note: FastAPI is included in mcp package, no need to install separately
+

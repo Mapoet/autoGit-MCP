@@ -145,3 +145,68 @@ class GitFlowInput(BaseModel):
             raise ValueError("combo_name is required when action=combo_plan")
         return self
 
+
+class WorkLogProvider(str, Enum):
+    """LLM providers for work log summary generation."""
+
+    openai = "openai"
+    deepseek = "deepseek"
+
+
+class WorkLogInput(BaseModel):
+    """Validated input for work log generation."""
+
+    # Repository sources
+    repo_paths: list[str] = Field(default_factory=list, description="Local repository paths (comma-separated or list)")
+    github_repos: list[str] = Field(default_factory=list, description="GitHub repositories (format: OWNER/REPO)")
+    gitee_repos: list[str] = Field(default_factory=list, description="Gitee repositories (format: OWNER/REPO)")
+    
+    # Time range
+    since: Optional[str] = Field(default=None, description="Start datetime (ISO format or YYYY-MM-DD). If not set, defaults to today 00:00:00")
+    until: Optional[str] = Field(default=None, description="End datetime (ISO format or YYYY-MM-DD). If not set, defaults to today 23:59:59")
+    days: Optional[int] = Field(default=None, description="If set, use last N days ending today. Overrides since/until")
+    
+    # Filtering
+    author: Optional[str] = Field(default=None, description="Filter commits by author name or email")
+    
+    # Work session settings
+    session_gap_minutes: int = Field(default=60, description="Gap in minutes to split work sessions")
+    
+    # Output settings
+    title: Optional[str] = Field(default=None, description="Title for the work log document")
+    add_summary: bool = Field(default=False, description="Add AI-generated summary at the end")
+    
+    # AI summary settings
+    provider: WorkLogProvider = Field(default=WorkLogProvider.deepseek, description="LLM provider for summary generation")
+    model: Optional[str] = Field(default=None, description="Model name (overrides default for provider)")
+    system_prompt: Optional[str] = Field(default=None, description="Custom system prompt for AI summary")
+    temperature: float = Field(default=0.3, description="Temperature for LLM (0.0-2.0)")
+    
+    @field_validator("session_gap_minutes")
+    @classmethod
+    def _positive_session_gap(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("session_gap_minutes must be positive")
+        return value
+
+    @field_validator("temperature")
+    @classmethod
+    def _validate_temperature(cls, value: float) -> float:
+        if not 0.0 <= value <= 2.0:
+            raise ValueError("temperature must be between 0 and 2")
+        return value
+
+    @field_validator("days")
+    @classmethod
+    def _positive_days(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value <= 0:
+            raise ValueError("days must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_repos(self) -> "WorkLogInput":
+        """Ensure at least one repository source is provided."""
+        if not self.repo_paths and not self.github_repos and not self.gitee_repos:
+            raise ValueError("At least one repository source must be provided (repo_paths, github_repos, or gitee_repos)")
+        return self
+

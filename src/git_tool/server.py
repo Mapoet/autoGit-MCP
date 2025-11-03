@@ -13,7 +13,17 @@ from pydantic import Field
 
 from .git_commands import execute_git_command
 from .git_flow_commands import execute_git_flow_command
-from .models import Cmd, DiffScope, FlowAction, FlowProvider, GitFlowInput, GitInput
+from .git_worklog_commands import execute_work_log_command
+from .models import (
+    Cmd,
+    DiffScope,
+    FlowAction,
+    FlowProvider,
+    GitFlowInput,
+    GitInput,
+    WorkLogInput,
+    WorkLogProvider,
+)
 
 server = FastMCP("git-mcp")
 app = server.streamable_http_app()
@@ -82,7 +92,7 @@ def git(
         payload = GitInput(
             repo_path=repo_path,
             cmd=Cmd(cmd),
-            args=args or {},  # 处理 None 或空字典的情况
+                args=args or {},  # 处理 None 或空字典的情况
             dry_run=dry_run,
             allow_destructive=allow_destructive,
             timeout_sec=timeout_sec,
@@ -215,15 +225,174 @@ def git_flow(
     )
 
 
+@server.tool()
+def work_log(
+    repo_paths: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description="Local repository paths. Can be a single path or list of paths. At least one repository source (repo_paths, github_repos, or gitee_repos) must be provided."
+        ),
+    ],
+    github_repos: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description="GitHub repositories in format OWNER/REPO. Can be a single repo or list of repos. Requires GITHUB_TOKEN environment variable for private repos."
+        ),
+    ],
+    gitee_repos: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description="Gitee repositories in format OWNER/REPO. Can be a single repo or list of repos. Requires GITEE_TOKEN environment variable for private repos."
+        ),
+    ],
+    since: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Start datetime in ISO format (e.g., '2024-11-03T00:00:00') or YYYY-MM-DD. If not set, defaults to today 00:00:00."
+        ),
+    ],
+    until: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="End datetime in ISO format (e.g., '2024-11-03T23:59:59') or YYYY-MM-DD. If not set, defaults to today 23:59:59."
+        ),
+    ],
+    days: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            description="If set, use last N days ending today. This overrides since/until parameters."
+        ),
+    ],
+    author: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Filter commits by author name or email (case-insensitive partial match)."
+        ),
+    ],
+    session_gap_minutes: Annotated[
+        int,
+        Field(
+            default=60,
+            description="Gap in minutes to split work sessions. Commits within this gap are considered part of the same session."
+        ),
+    ],
+    title: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Title for the work log document. If not set, auto-generates based on date range."
+        ),
+    ],
+    add_summary: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="If True, add AI-generated Chinese summary at the end of the work log."
+        ),
+    ],
+    provider: Annotated[
+        str,
+        Field(
+            default="deepseek",
+            description="LLM provider for summary generation. Supported: 'openai' or 'deepseek'. Requires corresponding API key (OPENAI_API_KEY or DEEPSEEK_API_KEY)."
+        ),
+    ],
+    model: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Model name to use. Overrides default for provider (gpt-4o-mini for OpenAI, deepseek-chat for DeepSeek)."
+        ),
+    ],
+    system_prompt: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Custom system prompt for AI summary. If not provided, uses default prompt optimized for technical work summaries."
+        ),
+    ],
+    temperature: Annotated[
+        float,
+        Field(
+            default=0.3,
+            description="Temperature parameter for LLM (0.0-2.0). Lower values produce more deterministic outputs."
+        ),
+    ],
+) -> str:
+    """Generate work log from git commits.
+    
+    This tool analyzes git commits from local repositories, GitHub, or Gitee to generate
+    a structured work log. It can:
+    - Collect commits from multiple repository sources
+    - Group commits by date
+    - Compute work sessions based on commit timestamps
+    - Generate AI-powered summaries (optional)
+    
+    Supports both single-project and multi-project analysis. For remote repositories
+    (GitHub/Gitee), set GITHUB_TOKEN or GITEE_TOKEN environment variables.
+    
+    Returns a JSON string with exit_code, stdout (markdown work log), and stderr (error messages).
+    """
+    try:
+        # Convert None lists to empty lists
+        repo_paths_list = repo_paths or []
+        github_repos_list = github_repos or []
+        gitee_repos_list = gitee_repos or []
+        
+        # Validate provider
+        try:
+            provider_enum = WorkLogProvider(provider)
+        except ValueError:
+            return json.dumps({
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": f"不支持的提供者: {provider}。支持的提供者: openai, deepseek",
+            })
+
+        payload = WorkLogInput(
+            repo_paths=repo_paths_list,
+            github_repos=github_repos_list,
+            gitee_repos=gitee_repos_list,
+            since=since,
+            until=until,
+            days=days,
+            author=author,
+            session_gap_minutes=session_gap_minutes,
+            title=title,
+            add_summary=add_summary,
+            provider=provider_enum,
+            model=model,
+            system_prompt=system_prompt,
+            temperature=temperature,
+        )
+        return execute_work_log_command(payload)
+    except ValueError as e:
+        return json.dumps({
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"参数验证错误: {str(e)}",
+        })
+
+
 __all__ = [
     "app",
     "server",
     "git",
     "git_flow",
+    "work_log",
     "GitInput",
     "GitFlowInput",
+    "WorkLogInput",
     "Cmd",
     "FlowAction",
     "FlowProvider",
+    "WorkLogProvider",
     "DiffScope",
 ]

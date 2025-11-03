@@ -6,6 +6,7 @@
 
 - **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `status`、`add`、`commit`、`pull`、`push`、`fetch`、`merge`、`rebase`、`diff`、`log`、`branch`、`switch`、`tag`、`reset`、`revert`、`clean`、`remote`、`stash`、`submodule`、`cherry-pick` 等命令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
+- **`work_log` 工具**：从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
 - **FastMCP Server**：基于 `mcp.server.fastmcp.FastMCP` 暴露工具，使用 HTTP/SSE 协议，便于与任意兼容 MCP 的客户端集成。
 - **完善的错误处理**：所有工具都包含全面的异常捕获和友好的错误消息返回。
 - **代码结构优化**：采用关注点分离设计，接口定义与实现逻辑分离，便于维护和扩展。
@@ -20,27 +21,76 @@
 pip install -r requirements.txt
 ```
 
-项目主要依赖：
-- `mcp` - Model Context Protocol 支持
+**核心依赖（必需）**：
+- `mcp` - Model Context Protocol 支持（包含 FastAPI）
 - `pydantic` (v2) - 数据验证
-- `fastapi` - HTTP 服务器框架
 - `uvicorn` - ASGI 服务器
+- `GitPython` - Git 仓库操作（`work_log` 工具必需）
+- `requests` - HTTP 请求（`work_log` 工具访问 GitHub/Gitee API）
+
+**可选依赖（根据使用场景安装）**：
+- `openai` - OpenAI API 客户端（`work_log` 工具使用 OpenAI 时）
+- `PyGithub` - GitHub API 客户端（`work_log` 工具访问 GitHub 时）
+
+> **注意**：`mcp` 包已包含 FastAPI，无需单独安装。
+
+详细的依赖列表请参考 [`requirements.txt`](requirements.txt)。
 
 ### 2. 配置环境变量（可选）
 
-如果使用 `git_flow` 工具，需要设置对应的 API Key：
+根据使用的功能，配置相应的环境变量：
+
+#### `git_flow` 工具所需环境变量
+
+`git_flow` 工具用于生成提交信息或执行计划，需要配置 LLM 提供者的 API Key：
+
+**DeepSeek（推荐，默认）**：
+```bash
+export DEEPSEEK_API_KEY="your-deepseek-api-key"              # 必填
+export DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"  # 可选，默认值
+export DEEPSEEK_MODEL="deepseek-chat"                        # 可选，默认值
+```
+
+**OpenGPT（备选）**：
+```bash
+export OPENGPT_API_KEY="your-opengpt-api-key"                # 必填
+export OPENGPT_API_URL="https://api.opengpt.com/v1/chat/completions"    # 可选，默认值
+export OPENGPT_MODEL="gpt-4.1-mini"                         # 可选，默认值
+```
+
+#### `work_log` 工具所需环境变量
+
+`work_log` 工具用于生成工作日志，包含两部分配置：
+
+**1. AI 总结生成（可选）**：
+
+如果启用了 `add_summary: true`，需要配置以下之一：
 
 ```bash
-# DeepSeek (默认)
-export DEEPSEEK_API_KEY="your-api-key"
-export DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"  # 可选
-export DEEPSEEK_MODEL="deepseek-chat"  # 可选，默认值
+# 使用 DeepSeek（推荐）
+export DEEPSEEK_API_KEY="your-deepseek-api-key"              # 必填
 
-# 或 OpenGPT
-export OPENGPT_API_KEY="your-api-key"
-export OPENGPT_API_URL="https://api.opengpt.com/v1/chat/completions"  # 可选
-export OPENGPT_MODEL="gpt-4.1-mini"  # 可选，默认值
+# 或使用 OpenAI
+export OPENAI_API_KEY="your-openai-api-key"                  # 必填
 ```
+
+**2. 远程仓库访问（可选）**：
+
+如果需要在 `work_log` 中访问 GitHub 或 Gitee 仓库：
+
+```bash
+# GitHub 仓库访问（访问私有仓库或提高 API 限制）
+export GITHUB_TOKEN="your-github-personal-access-token"     # 必填（访问私有仓库时）
+
+# Gitee 仓库访问（访问私有仓库）
+export GITEE_TOKEN="your-gitee-personal-access-token"       # 必填（访问私有仓库时）
+```
+
+> **注意**：
+> - `git` 工具不需要任何环境变量
+> - 访问公开的 GitHub/Gitee 仓库可以不设置 token，但设置了 token 可以避免 API 速率限制
+> - 所有环境变量都是可选的，只有在使用对应功能时才需要配置
+> - 完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)
 
 ### 3. 启动 MCP Server
 
@@ -64,7 +114,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 }
 ```
 
-重启客户端后，即可使用 `git` 和 `git_flow` 工具。
+重启客户端后，即可使用 `git`、`git_flow` 和 `work_log` 工具。
 
 ## 📖 使用示例
 
@@ -146,6 +196,36 @@ uvicorn src.git_tool.server:app --reload --port 9010
 }
 ```
 
+### `work_log` 工具
+
+#### 生成本地仓库工作日志
+
+```json
+{
+  "repo_paths": ["/path/to/repo"],
+  "days": 7,
+  "author": "John Doe",
+  "add_summary": true,
+  "provider": "deepseek"
+}
+```
+
+#### 生成多项目工作日志（包含 GitHub/Gitee）
+
+```json
+{
+  "repo_paths": ["/path/to/local/repo1", "/path/to/local/repo2"],
+  "github_repos": ["owner/repo1", "owner/repo2"],
+  "gitee_repos": ["owner/repo1"],
+  "since": "2024-11-01",
+  "until": "2024-11-07",
+  "session_gap_minutes": 60,
+  "add_summary": true,
+  "provider": "deepseek",
+  "temperature": 0.3
+}
+```
+
 ## 🏗️ 项目结构
 
 项目采用关注点分离的架构设计，接口定义与实现逻辑分离：
@@ -167,6 +247,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
     ├── models.py                  # 数据模型（Pydantic V2）
     ├── git_commands.py            # git 工具实现
     ├── git_flow_commands.py       # git_flow 工具实现
+    ├── git_worklog_commands.py    # work_log 工具实现
     ├── git_combos.py              # Git 组合命令模板
     └── prompt_profiles.py        # 提示词配置模板
 ```
@@ -177,6 +258,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 - **`models.py`**：所有数据模型和验证规则（使用 Pydantic V2）
 - **`git_commands.py`**：git 工具的所有实现逻辑和异常处理
 - **`git_flow_commands.py`**：git_flow 工具的所有实现逻辑和 LLM 调用
+- **`git_worklog_commands.py`**：work_log 工具的所有实现逻辑，包括提交收集、会话计算、AI 总结生成
 
 详细的代码结构说明请参考 [`docs/code-structure.md`](docs/code-structure.md)。
 
@@ -199,10 +281,12 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 | 提供方   | 必填变量                    | 可选变量                    | 说明 |
 | -------- | --------------------------- | --------------------------- | ---- |
-| OpenGPT  | `OPENGPT_API_KEY`           | `OPENGPT_API_URL`、`OPENGPT_MODEL` | 默认 URL `https://api.opengpt.com/v1/chat/completions`，默认模型 `gpt-4.1-mini`（可被环境变量或请求参数覆盖）。 |
 | DeepSeek | `DEEPSEEK_API_KEY`          | `DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` | 默认 URL `https://api.deepseek.com/v1/chat/completions`，默认模型 `deepseek-chat`。 |
+| OpenGPT  | `OPENGPT_API_KEY`           | `OPENGPT_API_URL`、`OPENGPT_MODEL` | 默认 URL `https://api.opengpt.com/v1/chat/completions`，默认模型 `gpt-4.1-mini`（可被环境变量或请求参数覆盖）。 |
 
 若需要连接兼容 OpenAI 格式的其他服务，可通过设置 URL 与模型名称实现。
+
+> **注意**：`git_flow` 工具仅支持 `deepseek` 和 `opengpt` 两种提供者。`work_log` 工具的 AI 总结功能支持 `deepseek` 和 `openai`（通过 `OPENAI_API_KEY` 环境变量）。
 
 ### 工具参数
 
@@ -277,6 +361,63 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 详细的模板内容请参考 [`src/git_tool/prompt_profiles.py`](src/git_tool/prompt_profiles.py)。
 
+## 📊 `work_log` 工作日志生成
+
+`work_log` 工具可以从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化的 Markdown 工作日志。它支持：
+
+- **多数据源**：支持本地仓库路径、GitHub 仓库（`OWNER/REPO`）、Gitee 仓库
+- **时间范围**：支持指定时间范围（`since`/`until`）或最近 N 天（`days`）
+- **作者过滤**：可以按作者姓名或邮箱过滤提交
+- **工作会话分析**：自动计算工作会话，识别提交的连续性和时间间隔
+- **并行工作检测**：在多项目模式下，可以检测跨项目的并行工作时间段
+- **AI 总结生成**：可选择性地使用 DeepSeek 或 OpenAI 生成中文工作总结
+
+### 环境变量
+
+| 用途 | 环境变量 | 是否必填 | 说明 |
+| ---- | -------- | -------- | ---- |
+| AI 总结（DeepSeek） | `DEEPSEEK_API_KEY` | 条件必填 | DeepSeek API Key（使用 DeepSeek 时必填） |
+| AI 总结（OpenAI） | `OPENAI_API_KEY` | 条件必填 | OpenAI API Key（使用 OpenAI 时必填） |
+| GitHub 仓库访问 | `GITHUB_TOKEN` | 条件必填 | GitHub Personal Access Token（访问私有仓库时必填） |
+| Gitee 仓库访问 | `GITEE_TOKEN` | 条件必填 | Gitee Personal Access Token（访问私有仓库时必填） |
+
+> **详细说明**：完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)，包含按工具分类的配置说明和使用场景示例。
+
+### 工具参数
+
+`work_log` 接口签名如下：
+
+```jsonc
+{
+  "repo_paths": ["/path/to/repo"],      // 本地仓库路径列表
+  "github_repos": ["owner/repo"],       // GitHub 仓库列表（格式：OWNER/REPO）
+  "gitee_repos": ["owner/repo"],        // Gitee 仓库列表（格式：OWNER/REPO）
+  "since": "2024-11-01",                // 起始时间（ISO 格式或 YYYY-MM-DD）
+  "until": "2024-11-07",                // 结束时间（ISO 格式或 YYYY-MM-DD）
+  "days": 7,                            // 最近 N 天（覆盖 since/until）
+  "author": "John Doe",                 // 作者过滤（可选）
+  "session_gap_minutes": 60,            // 工作会话间隔（分钟，默认 60）
+  "title": "Work Log",                  // 日志标题（可选）
+  "add_summary": false,                 // 是否生成 AI 总结（默认 false）
+  "provider": "deepseek",               // AI 提供者：openai 或 deepseek
+  "model": "deepseek-chat",             // 模型名称（可选，覆盖默认值）
+  "system_prompt": "...",               // 自定义系统提示词（可选）
+  "temperature": 0.3                     // 温度参数（0.0-2.0，默认 0.3）
+}
+```
+
+调用成功会返回如下结构：
+
+```jsonc
+{
+  "exit_code": 0,
+  "stdout": "# Work Log\n\n## 2024-11-01 (5 commits)\n...",
+  "stderr": ""
+}
+```
+
+`stdout` 包含完整的 Markdown 格式工作日志，如果启用了 `add_summary`，会在日志末尾包含 AI 生成的中文总结。
+
 ## 🛡️ 安全特性
 
 ### 危险命令防护
@@ -313,7 +454,14 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 ## 🔄 版本更新
 
-### 最新改进（v1.1）
+### 最新改进（v1.2）
+
+- ✅ **新增 `work_log` 工具**：支持从本地/GitHub/Gitee 收集提交并生成工作日志
+- ✅ **工作会话分析**：自动计算工作会话，检测并行工作时间
+- ✅ **AI 总结生成**：集成 DeepSeek 和 OpenAI，生成中文工作总结
+- ✅ **多项目支持**：支持同时分析多个本地或远程仓库
+
+### 历史版本（v1.1）
 
 - ✅ **代码重构**：分离接口定义与实现逻辑，提高代码可维护性
 - ✅ **Pydantic V2 迁移**：所有验证器已迁移到 Pydantic V2（`@field_validator` 和 `@model_validator`）
@@ -324,6 +472,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 ## 📚 文档
 
 - [`docs/code-structure.md`](docs/code-structure.md) - 代码结构详细说明
+- [`docs/environment-variables.md`](docs/environment-variables.md) - **环境变量详细说明**（按工具和功能分类）
 - [`docs/git-cheatsheet.md`](docs/git-cheatsheet.md) - Git 命令速查表
 - [`docs/git_comb.md`](docs/git_comb.md) - Git 组合命令说明
 - [`docs/mcp-git-tool.md`](docs/mcp-git-tool.md) - MCP Git 工具设计文档
