@@ -6,7 +6,7 @@
 
 - **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `status`、`add`、`commit`、`pull`、`push`、`fetch`、`merge`、`rebase`、`diff`、`log`、`branch`、`switch`、`tag`、`reset`、`revert`、`clean`、`remote`、`stash`、`submodule`、`cherry-pick` 等命令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
-- **`work_log` 工具**：从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
+- **`git_work` 工具**：从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
 - **FastMCP Server**：基于 `mcp.server.fastmcp.FastMCP` 暴露工具，使用 HTTP/SSE 协议，便于与任意兼容 MCP 的客户端集成。
 - **完善的错误处理**：所有工具都包含全面的异常捕获和友好的错误消息返回。
 - **代码结构优化**：采用关注点分离设计，接口定义与实现逻辑分离，便于维护和扩展。
@@ -25,12 +25,12 @@ pip install -r requirements.txt
 - `mcp` - Model Context Protocol 支持（包含 FastAPI）
 - `pydantic` (v2) - 数据验证
 - `uvicorn` - ASGI 服务器
-- `GitPython` - Git 仓库操作（`work_log` 工具必需）
-- `requests` - HTTP 请求（`work_log` 工具访问 GitHub/Gitee API）
+- `GitPython` - Git 仓库操作（`git_work` 工具必需）
+- `requests` - HTTP 请求（`git_work` 工具访问 GitHub/Gitee API）
 
 **可选依赖（根据使用场景安装）**：
-- `openai` - OpenAI API 客户端（`work_log` 工具使用 OpenAI 时）
-- `PyGithub` - GitHub API 客户端（`work_log` 工具访问 GitHub 时）
+- `openai` - OpenAI API 客户端（`git_work` 工具使用 OpenAI 时）
+- `PyGithub` - GitHub API 客户端（`git_work` 工具访问 GitHub 时）
 
 > **注意**：`mcp` 包已包含 FastAPI，无需单独安装。
 
@@ -58,9 +58,9 @@ export OPENGPT_API_URL="https://api.opengpt.com/v1/chat/completions"    # 可选
 export OPENGPT_MODEL="gpt-4.1-mini"                         # 可选，默认值
 ```
 
-#### `work_log` 工具所需环境变量
+#### `git_work` 工具所需环境变量
 
-`work_log` 工具用于生成工作日志，包含两部分配置：
+`git_work` 工具用于生成工作日志，包含两部分配置：
 
 **1. AI 总结生成（可选）**：
 
@@ -76,7 +76,7 @@ export OPENAI_API_KEY="your-openai-api-key"                  # 必填
 
 **2. 远程仓库访问（可选）**：
 
-如果需要在 `work_log` 中访问 GitHub 或 Gitee 仓库：
+如果需要在 `git_work` 中访问 GitHub 或 Gitee 仓库：
 
 ```bash
 # GitHub 仓库访问（访问私有仓库或提高 API 限制）
@@ -114,7 +114,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 }
 ```
 
-重启客户端后，即可使用 `git`、`git_flow` 和 `work_log` 工具。
+重启客户端后，即可使用 `git`、`git_flow` 和 `git_work` 工具。
 
 ## 📖 使用示例
 
@@ -196,7 +196,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 }
 ```
 
-### `work_log` 工具
+### `git_work` 工具
 
 #### 生成本地仓库工作日志
 
@@ -247,7 +247,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
     ├── models.py                  # 数据模型（Pydantic V2）
     ├── git_commands.py            # git 工具实现
     ├── git_flow_commands.py       # git_flow 工具实现
-    ├── git_worklog_commands.py    # work_log 工具实现
+    ├── git_gitwork_commands.py    # git_work 工具实现
     ├── git_combos.py              # Git 组合命令模板
     └── prompt_profiles.py        # 提示词配置模板
 ```
@@ -258,7 +258,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 - **`models.py`**：所有数据模型和验证规则（使用 Pydantic V2）
 - **`git_commands.py`**：git 工具的所有实现逻辑和异常处理
 - **`git_flow_commands.py`**：git_flow 工具的所有实现逻辑和 LLM 调用
-- **`git_worklog_commands.py`**：work_log 工具的所有实现逻辑，包括提交收集、会话计算、AI 总结生成
+- **`git_gitwork_commands.py`**：git_work 工具的所有实现逻辑，包括提交收集、会话计算、AI 总结生成
 
 详细的代码结构说明请参考 [`docs/code-structure.md`](docs/code-structure.md)。
 
@@ -286,7 +286,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 若需要连接兼容 OpenAI 格式的其他服务，可通过设置 URL 与模型名称实现。
 
-> **注意**：`git_flow` 工具仅支持 `deepseek` 和 `opengpt` 两种提供者。`work_log` 工具的 AI 总结功能支持 `deepseek` 和 `openai`（通过 `OPENAI_API_KEY` 环境变量）。
+> **注意**：`git_flow` 工具仅支持 `deepseek` 和 `opengpt` 两种提供者。`git_work` 工具的 AI 总结功能支持 `deepseek` 和 `openai`（通过 `OPENAI_API_KEY` 环境变量）。
 
 ### 工具参数
 
@@ -361,9 +361,9 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 详细的模板内容请参考 [`src/git_tool/prompt_profiles.py`](src/git_tool/prompt_profiles.py)。
 
-## 📊 `work_log` 工作日志生成
+## 📊 `git_work` 工作日志生成
 
-`work_log` 工具可以从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化的 Markdown 工作日志。它支持：
+`git_work` 工具可以从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化的 Markdown 工作日志。它支持：
 
 - **多数据源**：支持本地仓库路径、GitHub 仓库（`OWNER/REPO`）、Gitee 仓库
 - **时间范围**：支持指定时间范围（`since`/`until`）或最近 N 天（`days`）
@@ -385,7 +385,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 ### 工具参数
 
-`work_log` 接口签名如下：
+`git_work` 接口签名如下：
 
 ```jsonc
 {
@@ -456,7 +456,7 @@ uvicorn src.git_tool.server:app --reload --port 9010
 
 ### 最新改进（v1.2）
 
-- ✅ **新增 `work_log` 工具**：支持从本地/GitHub/Gitee 收集提交并生成工作日志
+- ✅ **新增 `git_work` 工具**：支持从本地/GitHub/Gitee 收集提交并生成工作日志
 - ✅ **工作会话分析**：自动计算工作会话，检测并行工作时间
 - ✅ **AI 总结生成**：集成 DeepSeek 和 OpenAI，生成中文工作总结
 - ✅ **多项目支持**：支持同时分析多个本地或远程仓库

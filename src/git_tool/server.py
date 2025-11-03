@@ -14,7 +14,7 @@ from pydantic import Field
 
 from .git_commands import execute_git_command
 from .git_flow_commands import execute_git_flow_command
-from .git_worklog_commands import execute_work_log_command
+from .git_gitwork_commands import execute_work_log_command
 from .models import (
     Cmd,
     DiffScope,
@@ -78,13 +78,13 @@ async def rest_git_flow(request: Request):
         )
 
 
-@rest_router.post("/work_log")
+@rest_router.post("/git_work")
 async def rest_work_log(request: Request):
-    """REST API 端点：调用 work_log 工具（无需 session ID）"""
+    """REST API 端点：调用 git_work 工具（无需 session ID）"""
     try:
         body = await request.json()
-        # work_log 函数需要所有参数，提供默认值
-        result = work_log(
+        # git_work 函数需要所有参数，提供默认值
+        result = git_work(
             repo_paths=body.get("repo_paths"),
             github_repos=body.get("github_repos"),
             gitee_repos=body.get("gitee_repos"),
@@ -117,7 +117,7 @@ async def rest_list_tools():
         "tools": [
             {"name": "git", "endpoint": "/api/git"},
             {"name": "git_flow", "endpoint": "/api/git_flow"},
-            {"name": "work_log", "endpoint": "/api/work_log"}
+            {"name": "git_work", "endpoint": "/api/git_work"}
         ]
     })
 
@@ -331,7 +331,7 @@ def git_flow(
 
 
 @server.tool()
-def work_log(
+def git_work(
     repo_paths: Annotated[
         Optional[list[str]],
         Field(
@@ -490,7 +490,7 @@ def work_log(
         return json.dumps({
             "exit_code": 1,
             "stdout": "",
-            "stderr": f"work_log 工具执行错误: {type(e).__name__}: {str(e)}\n详细信息: {error_details[-500:]}",
+            "stderr": f"git_work 工具执行错误: {type(e).__name__}: {str(e)}\n详细信息: {error_details[-500:]}",
         })
 
 
@@ -499,7 +499,7 @@ __all__ = [
     "server",
     "git",
     "git_flow",
-    "work_log",
+    "git_work",
     "GitInput",
     "GitFlowInput",
     "WorkLogInput",

@@ -22,15 +22,15 @@ uvicorn src.git_tool.server:app --reload --port 9010
 - `GET /api/tools` - 列出所有工具
 - `POST /api/git` - 调用 git 工具
 - `POST /api/git_flow` - 调用 git_flow 工具
-- `POST /api/work_log` - 调用 work_log 工具
+- `POST /api/git_work` - 调用 git_work 工具
 
 ## ⭐ REST API 示例（推荐，无需 session ID）
 
-### work_log 工具 - REST API
+### git_work 工具 - REST API
 
 ```bash
 # 简单直接，无需 session ID
-curl -X POST http://localhost:9010/api/work_log \
+curl -X POST http://localhost:9010/api/git_work \
   -H "Content-Type: application/json" \
   -d '{
     "repo_paths": ["/mnt/d/works/RayTracy"],
@@ -94,7 +94,7 @@ curl -X POST http://localhost:9010/mcp/ \
     "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "work_log",
+      "name": "git_work",
       "arguments": {
         "repo_paths": ["/mnt/d/works/RayTracy"],
         "days": 1,
@@ -115,7 +115,7 @@ curl -X POST http://localhost:9010/mcp \
     "id": 2,
     "method": "tools/call",
     "params": {
-      "name": "work_log",
+      "name": "git_work",
       "arguments": {
         "repo_paths": ["/mnt/d/works/RayTracy"],
         "since": "2024-11-01T00:00:00",
@@ -138,7 +138,7 @@ curl -X POST http://localhost:9010/mcp \
     "id": 3,
     "method": "tools/call",
     "params": {
-      "name": "work_log",
+      "name": "git_work",
       "arguments": {
         "repo_paths": ["/home/mapoet/Data/works/git2work"],
         "github_repos": ["owner/repo"],
@@ -161,7 +161,7 @@ curl -X POST http://localhost:9010/mcp \
     "id": 4,
     "method": "tools/call",
     "params": {
-      "name": "work_log",
+      "name": "git_work",
       "arguments": {
         "repo_paths": ["/mnt/d/works/RayTracy"]
       }
@@ -285,7 +285,7 @@ curl -X POST "$ENDPOINT" \
     "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "work_log",
+      "name": "git_work",
       "arguments": {
         "repo_paths": ["/mnt/d/works/RayTracy"],
         "days": 1,

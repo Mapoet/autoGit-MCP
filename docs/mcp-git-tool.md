@@ -182,9 +182,9 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 可额外暴露工具 `gen_commit_message`：先调用 `git diff` 收集改动，再利用 LLM 生成符合团队规范的提交信息，与 `git` 工具结合形成自动提交流程。
 
-## `work_log` 工作日志工具
+## `git_work` 工作日志工具
 
-除了 `git` 和 `git_flow`，项目还提供了 `work_log` 工具，用于从本地仓库、GitHub 或 Gitee 收集提交记录并生成结构化工作日志。
+除了 `git` 和 `git_flow`，项目还提供了 `git_work` 工具，用于从本地仓库、GitHub 或 Gitee 收集提交记录并生成结构化工作日志。
 
 ### 功能特性
 

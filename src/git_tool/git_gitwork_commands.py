@@ -694,7 +694,7 @@ def _generate_summary_with_llm(
             return f"错误：调用 DeepSeek API 失败: {str(e)}"
 
 
-def _render_markdown_worklog(
+def _render_markdown_gitwork(
     title: str,
     grouped: Dict[str, List[Dict[str, Any]]],
     details: Dict[str, Tuple[List[str], int, int, str]],
@@ -732,7 +732,7 @@ def _render_markdown_worklog(
     return "\n".join(lines)
 
 
-def _render_multi_project_worklog(
+def _render_multi_project_gitwork(
     title: str,
     repo_to_grouped: Dict[str, Dict[str, List[Dict[str, Any]]]],
     repo_to_details: Dict[str, Dict[str, Tuple[List[str], int, int, str]]],
@@ -959,7 +959,7 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
 
             # Generate markdown
             title = payload.title or (f"Work Log: {start.date()} to {end.date()}" if start and end else "Work Log")
-            md = _render_markdown_worklog(title, grouped, details, summary_text)
+            md = _render_markdown_gitwork(title, grouped, details, summary_text)
 
             return json.dumps({
                 "exit_code": 0,
@@ -1056,7 +1056,7 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
 
             # Generate markdown
             title = payload.title or (f"Work Log: {start.date()} to {end.date()}" if start and end else "Work Log")
-            md = _render_multi_project_worklog(
+            md = _render_multi_project_gitwork(
                 title, repo_to_grouped, repo_to_details, payload.add_summary, summary_text, payload.session_gap_minutes, repo_to_pull_times
             )
 

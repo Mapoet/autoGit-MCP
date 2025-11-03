@@ -10,14 +10,14 @@ from .models import (
     WorkLogInput,
     WorkLogProvider,
 )
-from .server import app, git, git_flow, server, work_log
+from .server import app, git, git_flow, server, git_work
 
 __all__ = [
     "app",
     "server",
     "git",
     "git_flow",
-    "work_log",
+    "git_work",
     "GitInput",
     "GitFlowInput",
     "WorkLogInput",
