@@ -1,6 +1,5 @@
 """Implementation of work log generation commands."""
 import json
-import os
 import re
 import subprocess
 from collections import defaultdict
@@ -10,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from git import Repo
 
+from .config import get_settings
 from .models import WorkLogInput, WorkLogProvider
 
 # Try to import optional dependencies
@@ -299,7 +299,11 @@ def _get_gitee_events(
 
     owner, repo_name = repo_full_name.split("/", 1)
     base_url = "https://gitee.com/api/v5"
-    headers = {"Authorization": f"token {token}"} if token else {}
+    headers = {}
+    
+    # Gitee API v5 使用 URL 参数 access_token 而不是 Header
+    from .git_catalog_commands import _add_gitee_auth, _check_gitee_token_error
+    client = {"base_url": base_url, "headers": headers, "token": token}
 
     # Get commits
     try:
@@ -312,7 +316,13 @@ def _get_gitee_events(
                 "per_page": 100,
                 "page": page,
             }
+            params = _add_gitee_auth(params, client)
             resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+            if resp.status_code == 401:
+                token_error = _check_gitee_token_error(resp)
+                if token_error:
+                    raise Exception(token_error)
+                raise Exception("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
             resp.raise_for_status()
             commits_data = resp.json()
 
@@ -366,7 +376,8 @@ def _get_gitlab_events(
     import urllib.parse
     repo_id = urllib.parse.quote(repo_full_name, safe="")
     
-    base_url = os.getenv("GITLAB_URL", "https://gitlab.com/api/v4")
+    settings = get_settings()
+    base_url = settings.gitlab_url or "https://gitlab.com/api/v4"
     headers = {}
     if token:
         headers["PRIVATE-TOKEN"] = token
@@ -730,11 +741,12 @@ def _generate_summary_with_llm(
     else:
         user_msg = f"请根据以下 commit 记录生成工作总结：\n\n{commit_context}"
 
+    settings = get_settings()
     if provider == WorkLogProvider.openai:
         if not OPENAI_AVAILABLE:
             return "错误：未安装 openai 包。请运行: pip install openai"
 
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = settings.openai_api_key
         if not api_key:
             return "错误：未提供 OpenAI API key。请设置环境变量 OPENAI_API_KEY"
 
@@ -755,14 +767,14 @@ def _generate_summary_with_llm(
             return f"错误：调用 OpenAI API 失败: {str(e)}"
 
     else:  # DeepSeek
-        api_key = os.getenv("DEEPSEEK_API_KEY")
+        api_key = settings.deepseek_api_key
         if not api_key:
             return "错误：未提供 DeepSeek API key。请设置环境变量 DEEPSEEK_API_KEY"
 
-        chosen_model = model or "deepseek-chat"
+        chosen_model = model or settings.deepseek_model or "deepseek-chat"
 
         try:
-            url = "https://api.deepseek.com/v1/chat/completions"
+            url = settings.deepseek_api_url or "https://api.deepseek.com/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -999,7 +1011,8 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                     details[c["sha"]] = (files, ins, dels, body)
 
             # GitHub repos
-            github_token = os.getenv("GITHUB_TOKEN")
+            settings = get_settings()
+            github_token = settings.github_token
             if payload.github_repos and github_token:
                 repo_name = payload.github_repos[0]
                 try:
@@ -1018,7 +1031,7 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                     })
 
             # Gitee repos
-            gitee_token = os.getenv("GITEE_TOKEN")
+            gitee_token = settings.gitee_token
             if payload.gitee_repos and gitee_token:
                 repo_name = payload.gitee_repos[0]
                 try:
@@ -1037,7 +1050,7 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                     })
 
             # GitLab repos
-            gitlab_token = os.getenv("GITLAB_TOKEN") or os.getenv("GITLAB_PRIVATE_TOKEN")
+            gitlab_token = settings.get_gitlab_token()
             if payload.gitlab_repos and gitlab_token:
                 repo_name = payload.gitlab_repos[0]
                 try:
@@ -1112,7 +1125,8 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                 repo_to_grouped[repo] = _group_commits_by_date(commits)
 
             # Process GitHub repos
-            github_token = os.getenv("GITHUB_TOKEN")
+            settings = get_settings()
+            github_token = settings.github_token
             if payload.github_repos and github_token:
                 for repo_name in payload.github_repos:
                     try:
@@ -1134,7 +1148,7 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                         })
 
             # Process Gitee repos
-            gitee_token = os.getenv("GITEE_TOKEN")
+            gitee_token = settings.gitee_token
             if payload.gitee_repos and gitee_token:
                 for repo_name in payload.gitee_repos:
                     try:
@@ -1156,7 +1170,7 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                         })
 
             # Process GitLab repos
-            gitlab_token = os.getenv("GITLAB_TOKEN") or os.getenv("GITLAB_PRIVATE_TOKEN")
+            gitlab_token = settings.get_gitlab_token()
             if payload.gitlab_repos and gitlab_token:
                 for repo_name in payload.gitlab_repos:
                     try:

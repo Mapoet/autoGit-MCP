@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
+from .config import get_settings
 from .git_combos import Combo, get_combo
 from .git_commands import run_git
 from .models import DiffScope, FlowAction, FlowProvider, GitFlowInput
@@ -319,22 +320,46 @@ def _call_provider(
 ) -> Dict[str, Any]:
     """Send prompt to the configured provider and parse the response."""
 
+    settings = get_settings()
     config = _PROVIDER_CONFIG[payload.provider]
     api_key_env = config["api_key_env"]
     assert api_key_env is not None
-    api_key = os.environ.get(api_key_env)
+    
+    # 从 Settings 获取 API key
+    if api_key_env == "DEEPSEEK_API_KEY":
+        api_key = settings.deepseek_api_key
+    elif api_key_env == "OPENGPT_API_KEY":
+        api_key = settings.opengpt_api_key
+    else:
+        raise RuntimeError(f"unsupported API key env: {api_key_env}")
+    
     if not api_key:
         raise RuntimeError(f"missing API key: set {api_key_env}")
 
+    # 从 Settings 获取 URL
     url_env = config["url_env"]
-    url = os.environ.get(url_env) if url_env else None
+    if url_env == "DEEPSEEK_API_URL":
+        url = settings.deepseek_api_url
+    elif url_env == "OPENGPT_API_URL":
+        url = settings.opengpt_api_url
+    else:
+        url = None
+    
     if not url:
         url = config.get("default_url")
     if not url:
         raise RuntimeError("no API endpoint configured")
 
+    # 从 Settings 获取 model
     model_env = config.get("model_env")
-    chosen_model = payload.model or (os.environ.get(model_env) if model_env else None) or config.get("default_model")
+    if model_env == "DEEPSEEK_MODEL":
+        default_model = settings.deepseek_model
+    elif model_env == "OPENGPT_MODEL":
+        default_model = settings.opengpt_model
+    else:
+        default_model = None
+    
+    chosen_model = payload.model or default_model or config.get("default_model")
     if not chosen_model:
         raise RuntimeError("no model configured")
 

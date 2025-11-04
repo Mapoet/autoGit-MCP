@@ -13,7 +13,7 @@ from .models import (
     WorkLogInput,
     WorkLogProvider,
 )
-from .server import app, git, git_catalog, git_flow, git_work, server
+from .server import app, git, git_catalog, git_flow, git_work, health, reload_config, server, SETTINGS
 
 __all__ = [
     "app",
@@ -22,6 +22,9 @@ __all__ = [
     "git_flow",
     "git_work",
     "git_catalog",
+    "health",
+    "reload_config",
+    "SETTINGS",
     "GitInput",
     "GitFlowInput",
     "WorkLogInput",

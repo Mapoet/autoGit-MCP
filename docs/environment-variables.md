@@ -2,6 +2,69 @@
 
 本文档详细说明项目中使用的所有环境变量及其对应的功能。
 
+## 配置方式
+
+环境变量可以通过以下三种方式设置：
+
+### 1. 系统环境变量（传统方式）
+
+```bash
+export DEEPSEEK_API_KEY="sk-xxxxx"
+export GITHUB_TOKEN="ghp_xxxxx"
+```
+
+### 2. MCP 配置文件（推荐）
+
+在 MCP 客户端配置文件中（如 `~/.cursor/mcp.json`），可以在 `mcpServers` 的 `env` 字段中直接设置：
+
+```json
+{
+  "mcpServers": {
+    "git-mcp": {
+      "command": "python",
+      "args": ["-m", "uvicorn", "src.git_tool.server:app", "--port", "9010"],
+      "env": {
+        "DEEPSEEK_API_KEY": "sk-xxxxx",
+        "GITHUB_TOKEN": "ghp_xxxxx",
+        "GITEE_TOKEN": "your-gitee-token",
+        "GITLAB_TOKEN": "glpat-xxxxx"
+      }
+    }
+  }
+}
+```
+
+> **优势**：
+> - 密钥集中管理，无需在系统环境中设置
+> - 不同 MCP 服务器可以使用不同的配置
+> - 配置变更后重启服务器即可生效
+
+### 3. .env 文件（可选）
+
+项目支持使用 `.env` 文件（需要放在项目根目录）：
+
+```bash
+# .env
+DEEPSEEK_API_KEY=sk-xxxxx
+GITHUB_TOKEN=ghp_xxxxx
+```
+
+> **注意**：`.env` 文件应添加到 `.gitignore`，避免将密钥提交到代码仓库。
+
+## 配置验证
+
+启动服务器时会自动加载和验证所有环境变量。如果配置有误，服务器会在启动时报告错误（fail-fast）。
+
+可以使用 `health` 工具检查当前配置状态：
+
+```json
+{
+  "tool": "health"
+}
+```
+
+该工具会返回所有环境变量的状态（密钥以掩码形式显示，如 `sk-xxxxx...yyyy`），不会泄露完整密钥内容。
+
 ## 环境变量概览
 
 | 环境变量 | 功能模块 | 是否必填 | 说明 |

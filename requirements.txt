@@ -1,6 +1,7 @@
 # Core dependencies (required)
 mcp>=1.0.0                    # Model Context Protocol support (includes FastAPI)
 pydantic>=2.0.0               # Data validation (v2)
+pydantic-settings>=2.0.0      # Settings management for Pydantic V2
 uvicorn[standard]>=0.27.0     # ASGI server for FastMCP
 
 # Git operations (required for git_work tool)

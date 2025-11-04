@@ -140,6 +140,8 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 在 Cursor 等 MCP 客户端中配置（通常为 `~/.cursor/mcp.json` 或客户端配置目录）：
 
+#### 方式一：使用 URL 连接（推荐用于 HTTP 服务器模式）
+
 ```json
 {
   "mcpServers": {
@@ -150,7 +152,32 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 }
 ```
 
-重启客户端后，即可使用 `git`、`git_flow`、`git_work` 和 `git_catalog` 工具。
+#### 方式二：使用命令行启动 + 环境变量（推荐用于直接集成）
+
+```json
+{
+  "mcpServers": {
+    "git-mcp": {
+      "command": "python",
+      "args": ["-m", "uvicorn", "src.git_tool.server:app", "--port", "9010", "--lifespan", "on"],
+      "env": {
+        "DEEPSEEK_API_KEY": "sk-xxxxx",
+        "GITHUB_TOKEN": "ghp_xxxxx",
+        "GITEE_TOKEN": "your-gitee-token",
+        "GITLAB_TOKEN": "glpat-xxxxx"
+      }
+    }
+  }
+}
+```
+
+> **说明**：
+> - 使用 `"env"` 字段可以在 MCP 配置中直接设置环境变量，无需在系统环境中配置
+> - 这些环境变量会在服务器启动时自动加载和验证
+> - 所有密钥都会自动从 `os.environ` 读取，无需额外配置
+> - 可以使用 `health` 工具检查配置状态（密钥会以掩码形式显示）
+
+重启客户端后，即可使用 `git`、`git_flow`、`git_work`、`git_catalog`、`health` 和 `reload_config` 工具。
 
 ## 📖 使用示例
 
@@ -355,6 +382,30 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 }
 ```
 
+### `health` 工具
+
+#### 检查配置状态
+
+```json
+{
+  "tool": "health"
+}
+```
+
+返回当前环境变量配置状态（密钥以掩码形式显示，如 `sk-xxxxx...yyyy`）和各个工具的可用性。
+
+### `reload_config` 工具
+
+#### 重新加载配置
+
+```json
+{
+  "tool": "reload_config"
+}
+```
+
+从环境变量重新加载配置（热重载）。注意：外部客户端不会自动重建，建议重启服务器以完全更新。
+
 ## 🏗️ 项目结构
 
 项目采用关注点分离的架构设计，接口定义与实现逻辑分离：
@@ -372,6 +423,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 │   └── troubleshooting.md         # 故障排查指南
 └── src/git_tool/
     ├── __init__.py                # 模块导出
+    ├── config.py                  # 配置管理（环境变量集中管理）
     ├── server.py                  # MCP 接口定义（仅包含 @server.tool() 装饰器）
     ├── models.py                  # 数据模型（Pydantic V2）
     ├── git_commands.py            # git 工具实现
@@ -384,12 +436,13 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ### 架构说明
 
+- **`config.py`**：集中配置管理，使用 Pydantic Settings 从环境变量读取配置，支持 MCP 配置文件的 `env` 字段和 `.env` 文件
 - **`server.py`**：仅包含 MCP 工具接口定义，不包含实现逻辑
 - **`models.py`**：所有数据模型和验证规则（使用 Pydantic V2）
 - **`git_commands.py`**：git 工具的所有实现逻辑和异常处理
 - **`git_flow_commands.py`**：git_flow 工具的所有实现逻辑和 LLM 调用
 - **`git_gitwork_commands.py`**：git_work 工具的所有实现逻辑，包括提交收集、会话计算、AI 总结生成
-- **`git_catalog_commands.py`**：git_catalog 工具的所有实现逻辑，包括 GitHub API 调用、数据收集和格式化
+- **`git_catalog_commands.py`**：git_catalog 工具的所有实现逻辑，包括 GitHub/Gitee/GitLab API 调用、数据收集和格式化
 
 详细的代码结构说明请参考 [`docs/code-structure.md`](docs/code-structure.md)。
 
@@ -710,7 +763,13 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ## 🔄 版本更新
 
-### 最新改进（v1.4）
+### 最新改进（v1.5）
+
+- ✅ **集中配置管理**：新增 `config.py` 模块，使用 Pydantic Settings 集中管理环境变量，支持从 MCP 配置文件的 `env` 字段读取
+- ✅ **健康检查工具**：新增 `health` 工具，可以检查配置状态和工具可用性（密钥以掩码形式显示）
+- ✅ **配置热重载**：新增 `reload_config` 工具，支持在不重启服务器的情况下重新加载环境变量配置
+
+### 历史版本（v1.4）
 
 - ✅ **`git_catalog` 工具支持 Gitee 和 GitLab**：新增 Gitee 和 GitLab 平台支持，所有 7 个子命令均可使用 Gitee 或 GitLab API
 - ✅ **`git_work` 工具支持 GitLab**：新增 GitLab 平台支持，可以从 GitLab 仓库收集提交记录并生成工作日志

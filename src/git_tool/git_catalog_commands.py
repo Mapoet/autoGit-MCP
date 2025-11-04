@@ -1,6 +1,5 @@
 """Implementation of git_catalog command execution."""
 import json
-import os
 import sys
 import time
 from collections import Counter, defaultdict
@@ -11,6 +10,7 @@ import requests
 from dateutil import parser as dateparser
 from github import Auth, Github, GithubException, RateLimitExceededException
 
+from .config import get_settings
 from .models import (
     AuthorsByRepoArgs,
     CatalogProvider,
@@ -31,8 +31,9 @@ from .models import (
 
 
 def gh_client() -> Github:
-    """从环境变量 GITHUB_TOKEN 读取 token；未设置则匿名（速率 60/h）。"""
-    token = os.getenv("GITHUB_TOKEN")
+    """从 Settings 读取 token；未设置则匿名（速率 60/h）。"""
+    settings = get_settings()
+    token = settings.github_token
     if not token:
         return Github(per_page=100)
     # 使用新的 Auth API 避免弃用警告
@@ -49,7 +50,8 @@ def gitee_client() -> Dict[str, Any]:
     
     某些 token 类型可能只支持 URL 参数方式，所以我们在每个请求中都使用 URL 参数方式。
     """
-    token = os.getenv("GITEE_TOKEN")
+    settings = get_settings()
+    token = settings.gitee_token
     base_url = "https://gitee.com/api/v5"
     headers = {}
     # 注意：Gitee API v5 可能要求使用 URL 参数 access_token 而不是 Header
@@ -101,8 +103,9 @@ def gitlab_client() -> Dict[str, Any]:
     
     支持自定义 GitLab 实例 URL（通过 GITLAB_URL 环境变量）。
     """
-    token = os.getenv("GITLAB_TOKEN") or os.getenv("GITLAB_PRIVATE_TOKEN")
-    base_url = os.getenv("GITLAB_URL", "https://gitlab.com/api/v4")
+    settings = get_settings()
+    token = settings.get_gitlab_token()
+    base_url = settings.gitlab_url or "https://gitlab.com/api/v4"
     headers = {}
     if token:
         # GitLab 使用 PRIVATE-TOKEN header
@@ -625,8 +628,14 @@ def _fetch_user_activity_across_repos_gitee(
     repos = []
     while True:
         params = {"page": page, "per_page": 100, "type": args.repo_type}
+        params = _add_gitee_auth(params, client)
         try:
             resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+            if resp.status_code == 401:
+                token_error = _check_gitee_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
             resp.raise_for_status()
             data = resp.json()
             if not data:
@@ -635,6 +644,8 @@ def _fetch_user_activity_across_repos_gitee(
             if len(data) < 100:
                 break
             page += 1
+        except ValueError:
+            raise
         except Exception as e:
             print(f"[warn] 获取仓库列表失败: {e}", file=sys.stderr)
             break
@@ -659,8 +670,14 @@ def _fetch_user_activity_across_repos_gitee(
                     params["until"] = until.isoformat()
                 if args.author_login:
                     params["author"] = args.author_login
+                params = _add_gitee_auth(params, client)
 
                 resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
                 resp.raise_for_status()
                 commits_data = resp.json()
 
@@ -920,9 +937,15 @@ def _fetch_repo_activity_across_authors_gitee(
                 params["since"] = since.isoformat()
             if until:
                 params["until"] = until.isoformat()
+            params = _add_gitee_auth(params, client)
 
             try:
                 resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
                 resp.raise_for_status()
                 commits_data = resp.json()
 
@@ -1046,9 +1069,15 @@ def _fetch_repo_activity_across_authors_gitee(
                 params["since"] = since.isoformat()
             if until:
                 params["until"] = until.isoformat()
+            params = _add_gitee_auth(params, client)
 
             try:
                 resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
                 resp.raise_for_status()
                 commits_data = resp.json()
 
@@ -1118,8 +1147,14 @@ def _list_repos_for_author_gitee(
     repos = []
     while True:
         params = {"page": page, "per_page": 100, "type": args.repo_type}
+        params = _add_gitee_auth(params, client)
         try:
             resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+            if resp.status_code == 401:
+                token_error = _check_gitee_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
             resp.raise_for_status()
             data = resp.json()
             if not data:
@@ -1163,8 +1198,14 @@ def _list_repos_for_author_gitee(
                     params["until"] = until.isoformat()
                 if args.author_login:
                     params["author"] = args.author_login
+                params = _add_gitee_auth(params, client)
 
                 resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
                 resp.raise_for_status()
                 commits_data = resp.json()
 

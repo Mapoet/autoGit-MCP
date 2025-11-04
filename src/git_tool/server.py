@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+from .config import get_settings, mask_secret, reload_settings
 from .git_commands import execute_git_command
 from .git_flow_commands import execute_git_flow_command
 from .git_gitwork_commands import execute_work_log_command
@@ -29,6 +30,9 @@ from .models import (
     WorkLogInput,
     WorkLogProvider,
 )
+
+# Load settings at startup
+SETTINGS = get_settings()
 
 server = FastMCP("git-mcp")
 # SSE 模式（用于标准 MCP 客户端，需要 session ID）
@@ -662,6 +666,106 @@ def git_catalog(
         }, ensure_ascii=False)
 
 
+@server.tool()
+def health() -> str:
+    """检查环境配置与外部服务就绪情况（不泄露明文密钥）。
+    
+    返回当前配置的状态信息，包括：
+    - 环境变量是否已设置（掩码显示）
+    - 各功能模块的可用性
+    
+    注意：此工具不会泄露密钥的完整内容，仅显示掩码后的值用于验证配置。
+    
+    Returns:
+        JSON 字符串，包含配置状态和工具可用性信息
+    """
+    s = get_settings()
+    
+    # 检查外部客户端可用性
+    github_ready = bool(s.github_token)
+    gitee_ready = bool(s.gitee_token)
+    gitlab_ready = bool(s.get_gitlab_token())
+    deepseek_ready = bool(s.deepseek_api_key)
+    opengpt_ready = bool(s.opengpt_api_key)
+    openai_ready = bool(s.openai_api_key)
+    
+    return json.dumps({
+        "status": "ok",
+        "config": {
+            "deepseek": {
+                "api_key": mask_secret(s.deepseek_api_key),
+                "api_url": s.deepseek_api_url,
+                "model": s.deepseek_model,
+                "ready": deepseek_ready,
+            },
+            "opengpt": {
+                "api_key": mask_secret(s.opengpt_api_key),
+                "api_url": s.opengpt_api_url,
+                "model": s.opengpt_model,
+                "ready": opengpt_ready,
+            },
+            "openai": {
+                "api_key": mask_secret(s.openai_api_key),
+                "ready": openai_ready,
+            },
+            "github": {
+                "token": mask_secret(s.github_token),
+                "ready": github_ready,
+            },
+            "gitee": {
+                "token": mask_secret(s.gitee_token),
+                "ready": gitee_ready,
+            },
+            "gitlab": {
+                "token": mask_secret(s.get_gitlab_token()),
+                "url": s.gitlab_url,
+                "ready": gitlab_ready,
+            },
+        },
+        "tools_available": {
+            "git": True,  # 始终可用（本地操作）
+            "git_flow": deepseek_ready or opengpt_ready,
+            "git_work": {
+                "local_repos": True,  # 始终可用
+                "github_repos": github_ready,
+                "gitee_repos": gitee_ready,
+                "gitlab_repos": gitlab_ready,
+                "ai_summary": deepseek_ready or openai_ready,
+            },
+            "git_catalog": {
+                "github": True,  # 匿名访问可用，但建议设置 token
+                "gitee": True,  # 公开仓库可用，但建议设置 token
+                "gitlab": True,  # 公开仓库可用，但建议设置 token
+            },
+        },
+    }, ensure_ascii=False)
+
+
+@server.tool()
+def reload_config() -> str:
+    """重新加载环境变量配置（热重载）。
+    
+    从环境变量重新加载配置。注意：
+    - 外部客户端（如 GitHub、OpenAI 客户端）不会自动重建
+    - 如果需要完全更新外部客户端，建议重启服务器进程
+    
+    Returns:
+        JSON 字符串，包含重新加载后的配置状态
+    """
+    try:
+        global SETTINGS
+        SETTINGS = reload_settings()
+        return json.dumps({
+            "status": "ok",
+            "message": "配置已重新加载",
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": f"重新加载配置失败: {str(e)}",
+        }, ensure_ascii=False)
+
+
 __all__ = [
     "app",
     "server",
@@ -669,6 +773,8 @@ __all__ = [
     "git_flow",
     "git_work",
     "git_catalog",
+    "health",
+    "reload_config",
     "GitInput",
     "GitFlowInput",
     "WorkLogInput",
@@ -679,4 +785,5 @@ __all__ = [
     "FlowProvider",
     "WorkLogProvider",
     "DiffScope",
+    "SETTINGS",
 ]
