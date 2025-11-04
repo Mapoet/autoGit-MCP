@@ -5,13 +5,15 @@ import sys
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import requests
 from dateutil import parser as dateparser
 from github import Auth, Github, GithubException, RateLimitExceededException
 
 from .models import (
     AuthorsByRepoArgs,
+    CatalogProvider,
     CrossReposArgs,
     CmdCatalog,
     GitCatalogInput,
@@ -36,6 +38,20 @@ def gh_client() -> Github:
     # 使用新的 Auth API 避免弃用警告
     auth = Auth.Token(token)
     return Github(auth=auth, per_page=100)
+
+
+def gitee_client() -> Dict[str, Any]:
+    """创建 Gitee API 客户端（返回配置字典）。"""
+    token = os.getenv("GITEE_TOKEN")
+    base_url = "https://gitee.com/api/v5"
+    headers = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    return {
+        "base_url": base_url,
+        "headers": headers,
+        "token": token,
+    }
 
 
 def parse_dt(s: Optional[str]) -> Optional[datetime]:
@@ -510,6 +526,677 @@ def _list_user_repos(g: Github, args: UserReposArgs) -> List[Dict[str, Any]]:
 
 
 # ──────────────────────────────────────────────────────────────
+# Gitee 实现函数
+# ──────────────────────────────────────────────────────────────
+
+
+def _fetch_user_activity_across_repos_gitee(
+    client: Dict[str, Any], args: CrossReposArgs
+) -> List[Dict[str, Any]]:
+    """不同仓库同一作者（明细）- Gitee 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    # 枚举仓库列表
+    owner = args.owner or args.author_login
+    if not owner:
+        raise ValueError("必须提供 owner 或 author_login")
+
+    # 获取用户的仓库列表
+    repos_url = f"{base_url}/users/{owner}/repos"
+    page = 1
+    repos = []
+    while True:
+        params = {"page": page, "per_page": 100, "type": args.repo_type}
+        try:
+            resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                break
+            repos.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except Exception as e:
+            print(f"[warn] 获取仓库列表失败: {e}", file=sys.stderr)
+            break
+
+    # 遍历仓库获取提交
+    for repo_data in repos:
+        full_name = repo_data.get("full_name", "")
+        if not full_name:
+            continue
+
+        owner_name, repo_name = full_name.split("/", 1)
+        commits_url = f"{base_url}/repos/{owner_name}/{repo_name}/commits"
+
+        try:
+            commit_page = 1
+            cnt = 0
+            while cnt < args.max_per_repo:
+                params = {"page": commit_page, "per_page": 100}
+                if since:
+                    params["since"] = since.isoformat()
+                if until:
+                    params["until"] = until.isoformat()
+                if args.author_login:
+                    params["author"] = args.author_login
+
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data:
+                    break
+
+                for c in commits_data:
+                    # 邮箱过滤
+                    if args.author_email:
+                        author_email = c.get("commit", {}).get("author", {}).get("email", "")
+                        if author_email.lower() != args.author_email.lower():
+                            continue
+
+                    commit_date_str = c.get("commit", {}).get("author", {}).get("date", "")
+                    if commit_date_str:
+                        try:
+                            commit_date = datetime.fromisoformat(commit_date_str.replace("Z", "+00:00"))
+                            if commit_date.tzinfo is None:
+                                commit_date = commit_date.replace(tzinfo=timezone.utc)
+
+                            if since and commit_date < since:
+                                continue
+                            if until and commit_date > until:
+                                continue
+                        except Exception:
+                            pass
+
+                    rows.append({
+                        "repo": full_name,
+                        "sha": c.get("sha", "")[:40],
+                        "date": commit_date_str,
+                        "author_login": c.get("author", {}).get("login", "") if c.get("author") else "",
+                        "author_name": c.get("commit", {}).get("author", {}).get("name", ""),
+                        "author_email": c.get("commit", {}).get("author", {}).get("email", ""),
+                        "committer_login": c.get("committer", {}).get("login", "") if c.get("committer") else "",
+                        "title": (c.get("commit", {}).get("message", "") or "").splitlines()[0],
+                        "url": c.get("html_url", ""),
+                    })
+                    cnt += 1
+                    if cnt >= args.max_per_repo:
+                        break
+
+                if len(commits_data) < 100 or cnt >= args.max_per_repo:
+                    break
+                commit_page += 1
+
+        except Exception as e:
+            print(f"[warn] 跳过 {full_name}: {e}", file=sys.stderr)
+            continue
+
+    return rows
+
+
+def _search_repos_by_keyword_gitee(
+    client: Dict[str, Any], args: SearchReposArgs
+) -> List[Dict[str, Any]]:
+    """关键词检索仓库 - Gitee 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    # Gitee 搜索 API
+    search_url = f"{base_url}/search/repositories"
+    page = 1
+
+    while len(rows) < args.limit:
+        params = {
+            "q": args.keyword,
+            "page": page,
+            "per_page": min(100, args.limit - len(rows)),
+        }
+        if args.language:
+            params["language"] = args.language
+        if args.min_stars:
+            params["sort"] = "stars_count"
+            params["order"] = "desc"
+
+        try:
+            resp = requests.get(search_url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if not data or not isinstance(data, list):
+                break
+
+            for repo in data:
+                # 过滤条件
+                if args.min_stars and repo.get("stargazers_count", 0) < args.min_stars:
+                    continue
+                if args.owner and repo.get("owner", {}).get("login", "") != args.owner:
+                    continue
+
+                rows.append({
+                    "full_name": repo.get("full_name", ""),
+                    "name": repo.get("name", ""),
+                    "owner": repo.get("owner", {}).get("login", "") if repo.get("owner") else "",
+                    "description": repo.get("description", ""),
+                    "language": repo.get("language", ""),
+                    "stargazers_count": repo.get("stargazers_count", 0),
+                    "forks_count": repo.get("forks_count", 0),
+                    "archived": repo.get("archived", False),
+                    "private": repo.get("private", False),
+                    "updated_at": repo.get("updated_at", ""),
+                    "pushed_at": repo.get("pushed_at", ""),
+                    "html_url": repo.get("html_url", ""),
+                })
+
+                if len(rows) >= args.limit:
+                    break
+
+            if len(data) < 100:
+                break
+            page += 1
+
+        except Exception as e:
+            print(f"[warn] 搜索失败: {e}", file=sys.stderr)
+            break
+
+    # 本地排序
+    if args.sort == "stars":
+        rows.sort(key=lambda r: r["stargazers_count"], reverse=(args.order == "desc"))
+    elif args.sort == "updated":
+        rows.sort(key=lambda r: r["updated_at"] or "", reverse=(args.order == "desc"))
+
+    return rows[:args.limit]
+
+
+def _list_repos_for_org_gitee(client: Dict[str, Any], args: OrgReposArgs) -> List[Dict[str, Any]]:
+    """组织仓库列表 - Gitee 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    repos_url = f"{base_url}/orgs/{args.org}/repos"
+    page = 1
+
+    while len(rows) < args.limit:
+        params = {
+            "page": page,
+            "per_page": min(100, args.limit - len(rows)),
+            "type": args.repo_type,
+        }
+
+        try:
+            resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if not data:
+                break
+
+            for repo in data:
+                if (not args.include_archived) and repo.get("archived", False):
+                    continue
+
+                rows.append({
+                    "full_name": repo.get("full_name", ""),
+                    "name": repo.get("name", ""),
+                    "description": repo.get("description", ""),
+                    "language": repo.get("language", ""),
+                    "stargazers_count": repo.get("stargazers_count", 0),
+                    "forks_count": repo.get("forks_count", 0),
+                    "archived": repo.get("archived", False),
+                    "private": repo.get("private", False),
+                    "updated_at": repo.get("updated_at", ""),
+                    "pushed_at": repo.get("pushed_at", ""),
+                    "html_url": repo.get("html_url", ""),
+                })
+
+                if len(rows) >= args.limit:
+                    break
+
+            if len(data) < 100:
+                break
+            page += 1
+
+        except Exception as e:
+            print(f"[warn] 获取组织仓库失败: {e}", file=sys.stderr)
+            break
+
+    return rows
+
+
+def _fetch_repo_activity_across_authors_gitee(
+    client: Dict[str, Any], args: RepoAuthorsArgs
+) -> List[Dict[str, Any]]:
+    """同一仓库不同作者（明细）- Gitee 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    owner, repo_name = args.repo_full.split("/", 1)
+    commits_url = f"{base_url}/repos/{owner}/{repo_name}/commits"
+
+    authors_login = list({a for a in (args.authors_login or []) if a})
+    authors_emails = [e.lower() for e in (args.authors_emails or []) if e]
+
+    # 无作者清单 = 拉时间窗内所有提交
+    if not authors_login and not authors_emails:
+        commit_page = 1
+        while True:
+            params = {"page": commit_page, "per_page": 100}
+            if since:
+                params["since"] = since.isoformat()
+            if until:
+                params["until"] = until.isoformat()
+
+            try:
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data:
+                    break
+
+                for c in commits_data:
+                    rows.append({
+                        "repo": args.repo_full,
+                        "sha": c.get("sha", "")[:40],
+                        "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                        "author_login": c.get("author", {}).get("login", "") if c.get("author") else "",
+                        "author_name": c.get("commit", {}).get("author", {}).get("name", ""),
+                        "author_email": c.get("commit", {}).get("author", {}).get("email", ""),
+                        "committer_login": c.get("committer", {}).get("login", "") if c.get("committer") else "",
+                        "title": (c.get("commit", {}).get("message", "") or "").splitlines()[0],
+                        "url": c.get("html_url", ""),
+                    })
+
+                if len(commits_data) < 100:
+                    break
+                commit_page += 1
+            except Exception as e:
+                print(f"[warn] 获取提交失败: {e}", file=sys.stderr)
+                break
+        return rows
+
+    # 按 login 拉
+    for login in authors_login:
+        commit_page = 1
+        cnt = 0
+        while cnt < args.max_per_author:
+            params = {"page": commit_page, "per_page": 100, "author": login}
+            if since:
+                params["since"] = since.isoformat()
+            if until:
+                params["until"] = until.isoformat()
+
+            try:
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data:
+                    break
+
+                for c in commits_data:
+                    if authors_emails:
+                        author_email = c.get("commit", {}).get("author", {}).get("email", "")
+                        if not author_email or author_email.lower() not in authors_emails:
+                            continue
+
+                    rows.append({
+                        "repo": args.repo_full,
+                        "sha": c.get("sha", "")[:40],
+                        "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                        "author_login": c.get("author", {}).get("login", "") if c.get("author") else "",
+                        "author_name": c.get("commit", {}).get("author", {}).get("name", ""),
+                        "author_email": c.get("commit", {}).get("author", {}).get("email", ""),
+                        "committer_login": c.get("committer", {}).get("login", "") if c.get("committer") else "",
+                        "title": (c.get("commit", {}).get("message", "") or "").splitlines()[0],
+                        "url": c.get("html_url", ""),
+                    })
+                    cnt += 1
+                    if cnt >= args.max_per_author:
+                        break
+
+                if len(commits_data) < 100 or cnt >= args.max_per_author:
+                    break
+                commit_page += 1
+            except Exception as e:
+                print(f"[warn] login {login}: {e}", file=sys.stderr)
+                break
+
+    # 仅邮箱（补漏）
+    if authors_emails:
+        commit_page = 1
+        cnt = 0
+        while cnt < args.max_per_author:
+            params = {"page": commit_page, "per_page": 100}
+            if since:
+                params["since"] = since.isoformat()
+            if until:
+                params["until"] = until.isoformat()
+
+            try:
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data:
+                    break
+
+                for c in commits_data:
+                    author_email = c.get("commit", {}).get("author", {}).get("email", "")
+                    if not author_email or author_email.lower() not in authors_emails:
+                        continue
+
+                    rows.append({
+                        "repo": args.repo_full,
+                        "sha": c.get("sha", "")[:40],
+                        "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                        "author_login": c.get("author", {}).get("login", "") if c.get("author") else "",
+                        "author_name": c.get("commit", {}).get("author", {}).get("name", ""),
+                        "author_email": author_email,
+                        "committer_login": c.get("committer", {}).get("login", "") if c.get("committer") else "",
+                        "title": (c.get("commit", {}).get("message", "") or "").splitlines()[0],
+                        "url": c.get("html_url", ""),
+                    })
+                    cnt += 1
+                    if cnt >= args.max_per_author:
+                        break
+
+                if len(commits_data) < 100 or cnt >= args.max_per_author:
+                    break
+                commit_page += 1
+            except Exception as e:
+                print(f"[warn] email pass: {e}", file=sys.stderr)
+                break
+
+    return rows
+
+
+def _list_repos_for_author_gitee(
+    client: Dict[str, Any], args: ReposByAuthorArgs
+) -> List[Dict[str, Any]]:
+    """同一作者在哪些仓库（列表）- Gitee 版本。"""
+    results: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = defaultdict(int)
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    owner = args.owner or args.author_login
+    if not owner:
+        raise ValueError("必须提供 owner 或 author_login")
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    # 获取用户的仓库列表
+    repos_url = f"{base_url}/users/{owner}/repos"
+    page = 1
+    repos = []
+    while True:
+        params = {"page": page, "per_page": 100, "type": args.repo_type}
+        try:
+            resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                break
+            repos.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except Exception as e:
+            print(f"[warn] 获取仓库列表失败: {e}", file=sys.stderr)
+            break
+
+    # 遍历仓库统计提交
+    for repo_data in repos:
+        full_name = repo_data.get("full_name", "")
+        if not full_name:
+            continue
+
+        owner_name, repo_name = full_name.split("/", 1)
+        commits_url = f"{base_url}/repos/{owner_name}/{repo_name}/commits"
+
+        try:
+            commit_page = 1
+            repo_count = 0
+            while True:
+                params = {"page": commit_page, "per_page": 100}
+                if since:
+                    params["since"] = since.isoformat()
+                if until:
+                    params["until"] = until.isoformat()
+                if args.author_login:
+                    params["author"] = args.author_login
+
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data:
+                    break
+
+                for c in commits_data:
+                    if args.author_email:
+                        author_email = c.get("commit", {}).get("author", {}).get("email", "")
+                        if not author_email or author_email.lower() != args.author_email.lower():
+                            continue
+                    repo_count += 1
+
+                if len(commits_data) < 100:
+                    break
+                commit_page += 1
+
+            if repo_count >= args.min_commits:
+                counts[full_name] = repo_count
+
+        except Exception as e:
+            print(f"[warn] 跳过 {full_name}: {e}", file=sys.stderr)
+            continue
+
+    for repo_full, cnt in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+        results.append({"repo": repo_full, "commits": cnt})
+
+    return results
+
+
+def _list_authors_for_repo_gitee(
+    client: Dict[str, Any], args: AuthorsByRepoArgs
+) -> List[Dict[str, Any]]:
+    """同一仓库活跃作者（列表）- Gitee 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    owner, repo_name = args.repo_full.split("/", 1)
+    commits_url = f"{base_url}/repos/{owner}/{repo_name}/commits"
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    counter: Counter[str] = Counter()
+    meta: Dict[str, Tuple[str, str]] = {}
+
+    commit_page = 1
+    while True:
+        params = {"page": commit_page, "per_page": 100}
+        if since:
+            params["since"] = since.isoformat()
+        if until:
+            params["until"] = until.isoformat()
+
+        try:
+            resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            commits_data = resp.json()
+
+            if not commits_data:
+                break
+
+            for c in commits_data:
+                login = c.get("author", {}).get("login", "") if c.get("author") else ""
+                name = c.get("commit", {}).get("author", {}).get("name", "") or ""
+                email = c.get("commit", {}).get("author", {}).get("email", "") or ""
+
+                if args.prefer == "email" and email:
+                    key = email.lower()
+                elif args.prefer == "name" and name:
+                    key = name
+                else:
+                    key = login or email.lower() or name or "(unknown)"
+
+                counter[key] += 1
+                meta.setdefault(key, (login, email))
+
+            if len(commits_data) < 100:
+                break
+            commit_page += 1
+        except Exception as e:
+            print(f"[warn] 获取提交失败: {e}", file=sys.stderr)
+            break
+
+    for key, cnt in counter.most_common():
+        if cnt >= args.min_commits:
+            login, email = meta.get(key, ("", ""))
+            rows.append({
+                "repo": args.repo_full,
+                "author_key": key,
+                "author_login": login,
+                "author_email": email,
+                "commits": cnt,
+            })
+
+    return rows
+
+
+def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[Dict[str, Any]]:
+    """列出某用户 owned / starred / both 的仓库列表 - Gitee 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    def add_repo(repo_data: Dict[str, Any], relation: str) -> bool:
+        """添加仓库到结果列表（应用过滤条件）。"""
+        if (not args.include_archived) and repo_data.get("archived", False):
+            return False
+        if (not args.include_forks) and repo_data.get("fork", False):
+            return False
+        if (not args.include_private) and repo_data.get("private", False):
+            return False
+
+        rows.append({
+            "relation": relation,
+            "full_name": repo_data.get("full_name", ""),
+            "name": repo_data.get("name", ""),
+            "owner": repo_data.get("owner", {}).get("login", "") if repo_data.get("owner") else "",
+            "description": repo_data.get("description", ""),
+            "language": repo_data.get("language", ""),
+            "stargazers_count": repo_data.get("stargazers_count", 0),
+            "forks_count": repo_data.get("forks_count", 0),
+            "archived": repo_data.get("archived", False),
+            "private": repo_data.get("private", False),
+            "updated_at": repo_data.get("updated_at", ""),
+            "pushed_at": repo_data.get("pushed_at", ""),
+            "html_url": repo_data.get("html_url", ""),
+        })
+        return True
+
+    # owned
+    if args.mode in ("owned", "both"):
+        try:
+            repos_url = f"{base_url}/users/{args.login}/repos"
+            page = 1
+            max_collect = args.limit + 50 if args.mode == "both" else args.limit
+
+            while len(rows) < max_collect:
+                params = {"page": page, "per_page": 100, "type": "owner"}
+                resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+
+                if not data:
+                    break
+
+                for repo in data:
+                    add_repo(repo, "owned")
+                    if len(rows) >= max_collect:
+                        break
+
+                if len(data) < 100 or len(rows) >= max_collect:
+                    break
+                page += 1
+        except Exception as e:
+            print(f"[warn] 获取 owned repos 失败: {e}", file=sys.stderr)
+
+    # starred
+    if args.mode in ("starred", "both"):
+        try:
+            starred_url = f"{base_url}/users/{args.login}/starred"
+            page = 1
+            max_collect = args.limit + 50 if args.mode == "both" else args.limit
+
+            while len(rows) < max_collect:
+                params = {"page": page, "per_page": 100}
+                resp = requests.get(starred_url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+
+                if not data:
+                    break
+
+                for repo in data:
+                    add_repo(repo, "starred")
+                    if len(rows) >= max_collect:
+                        break
+
+                if len(data) < 100 or len(rows) >= max_collect:
+                    break
+                page += 1
+        except Exception as e:
+            print(f"[warn] 获取 starred repos 失败: {e}", file=sys.stderr)
+
+    # 去重
+    seen: Dict[str, int] = {}
+    unique_rows: List[Dict[str, Any]] = []
+    for r in rows:
+        full_name = r["full_name"]
+        if full_name not in seen:
+            seen[full_name] = len(unique_rows)
+            unique_rows.append(r)
+        elif unique_rows[seen[full_name]]["relation"] == "starred" and r["relation"] == "owned":
+            unique_rows[seen[full_name]] = r
+
+    rows = unique_rows
+
+    # 统一排序
+    key_map: Dict[str, Any] = {
+        "updated": lambda r: r["updated_at"] or "",
+        "pushed": lambda r: r["pushed_at"] or "",
+        "full_name": lambda r: r["full_name"] or "",
+        "stars": lambda r: r["stargazers_count"] or 0,
+    }
+    keyfunc = key_map.get(args.sort, key_map["updated"])
+    rows.sort(key=keyfunc, reverse=(args.order == "desc"))
+
+    # 限量
+    if len(rows) > args.limit:
+        rows = rows[:args.limit]
+
+    return rows
+
+
+# ──────────────────────────────────────────────────────────────
 # 统一入口函数
 # ──────────────────────────────────────────────────────────────
 
@@ -522,26 +1209,50 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
         JSON 字符串，包含 exit_code、count（记录条数）、rows（表格型数据）
     """
     try:
-        g = gh_client()
+        provider = payload.provider
         cmd = payload.cmd
         args = payload.args
 
-        if cmd == CmdCatalog.cross_repos:
-            rows = _fetch_user_activity_across_repos(g, args)  # type: ignore
-        elif cmd == CmdCatalog.repo_authors:
-            rows = _fetch_repo_activity_across_authors(g, args)  # type: ignore
-        elif cmd == CmdCatalog.repos_by_author:
-            rows = _list_repos_for_author(g, args)  # type: ignore
-        elif cmd == CmdCatalog.authors_by_repo:
-            rows = _list_authors_for_repo(g, args)  # type: ignore
-        elif cmd == CmdCatalog.search_repos:
-            rows = _search_repos_by_keyword(g, args)  # type: ignore
-        elif cmd == CmdCatalog.org_repos:
-            rows = _list_repos_for_org(g, args)  # type: ignore
-        elif cmd == CmdCatalog.user_repos:
-            rows = _list_user_repos(g, args)  # type: ignore
+        if provider == CatalogProvider.github:
+            g = gh_client()
+            if cmd == CmdCatalog.cross_repos:
+                rows = _fetch_user_activity_across_repos(g, args)  # type: ignore
+            elif cmd == CmdCatalog.repo_authors:
+                rows = _fetch_repo_activity_across_authors(g, args)  # type: ignore
+            elif cmd == CmdCatalog.repos_by_author:
+                rows = _list_repos_for_author(g, args)  # type: ignore
+            elif cmd == CmdCatalog.authors_by_repo:
+                rows = _list_authors_for_repo(g, args)  # type: ignore
+            elif cmd == CmdCatalog.search_repos:
+                rows = _search_repos_by_keyword(g, args)  # type: ignore
+            elif cmd == CmdCatalog.org_repos:
+                rows = _list_repos_for_org(g, args)  # type: ignore
+            elif cmd == CmdCatalog.user_repos:
+                rows = _list_user_repos(g, args)  # type: ignore
+            else:
+                raise ValueError(f"不支持的 cmd: {cmd}")
+
+        elif provider == CatalogProvider.gitee:
+            client = gitee_client()
+            if cmd == CmdCatalog.cross_repos:
+                rows = _fetch_user_activity_across_repos_gitee(client, args)  # type: ignore
+            elif cmd == CmdCatalog.repo_authors:
+                rows = _fetch_repo_activity_across_authors_gitee(client, args)  # type: ignore
+            elif cmd == CmdCatalog.repos_by_author:
+                rows = _list_repos_for_author_gitee(client, args)  # type: ignore
+            elif cmd == CmdCatalog.authors_by_repo:
+                rows = _list_authors_for_repo_gitee(client, args)  # type: ignore
+            elif cmd == CmdCatalog.search_repos:
+                rows = _search_repos_by_keyword_gitee(client, args)  # type: ignore
+            elif cmd == CmdCatalog.org_repos:
+                rows = _list_repos_for_org_gitee(client, args)  # type: ignore
+            elif cmd == CmdCatalog.user_repos:
+                rows = _list_user_repos_gitee(client, args)  # type: ignore
+            else:
+                raise ValueError(f"不支持的 cmd: {cmd}")
+
         else:
-            raise ValueError(f"不支持的 cmd: {cmd}")
+            raise ValueError(f"不支持的 provider: {provider}")
 
         return json.dumps({
             "exit_code": 0,
@@ -565,6 +1276,15 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
             "count": 0,
             "rows": [],
             "stderr": f"GitHub API 错误: {str(e)}",
+        }, ensure_ascii=False)
+
+    except requests.exceptions.RequestException as e:
+        # Gitee API 网络错误
+        return json.dumps({
+            "exit_code": 1,
+            "count": 0,
+            "rows": [],
+            "stderr": f"Gitee API 错误: {str(e)}",
         }, ensure_ascii=False)
 
     except Exception as e:

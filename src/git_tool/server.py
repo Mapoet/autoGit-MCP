@@ -17,6 +17,7 @@ from .git_flow_commands import execute_git_flow_command
 from .git_gitwork_commands import execute_work_log_command
 from .git_catalog_commands import execute_git_catalog_command
 from .models import (
+    CatalogProvider,
     Cmd,
     CmdCatalog,
     DiffScope,
@@ -119,6 +120,7 @@ async def rest_git_catalog(request: Request):
     try:
         body = await request.json()
         result = git_catalog(
+            provider=body.get("provider", "github"),
             cmd=body.get("cmd"),
             args=body.get("args", {}),
         )
@@ -519,6 +521,14 @@ def git_work(
 
 @server.tool()
 def git_catalog(
+    provider: Annotated[
+        str,
+        Field(
+            default="github",
+            description="代码托管平台提供商。支持 'github' 或 'gitee'。默认 'github'。",
+            examples=["github", "gitee"],
+        ),
+    ],
     cmd: Annotated[
         str,
         Field(
@@ -593,9 +603,9 @@ def git_catalog(
         ),
     ],
 ) -> str:
-    """GitHub 活动/仓库目录查询工具（PyGithub）。
+    """GitHub/Gitee 活动/仓库目录查询工具。
     
-    统一入口：支持 7 个子命令查询 GitHub 仓库和提交活动。
+    统一入口：支持 7 个子命令查询 GitHub 或 Gitee 仓库和提交活动。
     
     子命令说明：
     - cross_repos: 不同仓库同一作者（提交明细） - 查询指定作者在多个仓库中的提交记录
@@ -607,7 +617,8 @@ def git_catalog(
     - user_repos: 作者拥有或 Star 的项目列表 - 列出指定用户拥有或 Star 的仓库，支持合并查询和多种过滤排序选项
     
     认证：
-    - 使用环境变量 GITHUB_TOKEN（未设置则匿名，速率限制 60/h）
+    - GitHub: 使用环境变量 GITHUB_TOKEN（未设置则匿名，速率限制 60/h）
+    - Gitee: 使用环境变量 GITEE_TOKEN（访问私有仓库时必填）
     - 设置 token 可提高 API 速率限制并访问私有仓库
     
     返回格式：
@@ -616,7 +627,7 @@ def git_catalog(
     """
     try:
         # 构建输入对象
-        payload = GitCatalogInput(cmd=CmdCatalog(cmd), args=args)
+        payload = GitCatalogInput(provider=CatalogProvider(provider), cmd=CmdCatalog(cmd), args=args)
         return execute_git_catalog_command(payload)
     except ValueError as e:
         # 参数验证错误（如 cmd 不是有效的枚举值）

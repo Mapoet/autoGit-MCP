@@ -278,13 +278,13 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ---
 
-## `git_catalog` GitHub 仓库目录查询工具
+## `git_catalog` GitHub/Gitee 仓库目录查询工具
 
-除了 `git`、`git_flow` 和 `git_work`，项目还提供了 `git_catalog` 工具，用于查询 GitHub 仓库和提交活动。
+除了 `git`、`git_flow` 和 `git_work`，项目还提供了 `git_catalog` 工具，用于查询 GitHub 或 Gitee 仓库和提交活动。
 
 ### 功能特性
 
-`git_catalog` 工具提供了统一的 GitHub 活动/仓库目录查询接口，支持 7 个子命令：
+`git_catalog` 工具提供了统一的 GitHub/Gitee 活动/仓库目录查询接口，支持 7 个子命令：
 
 1. **`cross_repos`** - 不同仓库同一作者（提交明细）：查询指定作者在多个仓库中的提交记录
 2. **`repo_authors`** - 同一仓库不同作者（提交明细）：查询指定仓库中多个作者的提交记录
@@ -298,6 +298,7 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ```jsonc
 {
+  "provider": "github" | "gitee",  // 代码托管平台提供商，默认 "github"
   "cmd": "search_repos" | "org_repos" | "cross_repos" | "repo_authors" | 
          "repos_by_author" | "authors_by_repo" | "user_repos",
   "args": {
@@ -334,16 +335,20 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ### 环境变量
 
-- `GITHUB_TOKEN` - GitHub Personal Access Token（可选，但强烈建议设置）
+- **GitHub**：`GITHUB_TOKEN` - GitHub Personal Access Token（可选，但强烈建议设置）
   - 未设置时使用匿名访问（速率限制 60/h）
   - 设置后可提高到 5000/h 并访问私有仓库
+- **Gitee**：`GITEE_TOKEN` - Gitee Personal Access Token（访问私有仓库时必填）
+  - 访问公开仓库时可选
+  - 访问私有仓库时必填
 
 ### 使用示例
 
-#### 搜索仓库
+#### 搜索仓库（GitHub）
 
 ```json
 {
+  "provider": "github",
   "cmd": "search_repos",
   "args": {
     "keyword": "gnss",
@@ -354,10 +359,25 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 }
 ```
 
+#### 搜索仓库（Gitee）
+
+```json
+{
+  "provider": "gitee",
+  "cmd": "search_repos",
+  "args": {
+    "keyword": "gnss",
+    "language": "C++",
+    "limit": 200
+  }
+}
+```
+
 #### 列出组织仓库
 
 ```json
 {
+  "provider": "github",
   "cmd": "org_repos",
   "args": {
     "org": "tensorflow",
@@ -371,6 +391,7 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ```json
 {
+  "provider": "github",
   "cmd": "user_repos",
   "args": {
     "login": "mapoet",
@@ -388,6 +409,7 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ```json
 {
+  "provider": "github",
   "cmd": "cross_repos",
   "args": {
     "author_login": "octocat",
@@ -401,10 +423,11 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ### 性能优化
 
-- **速率限制保护**：自动检测并处理 GitHub API 速率限制
+- **速率限制保护**：自动检测并处理 GitHub/Gitee API 速率限制
 - **提前退出策略**：在收集足够数据时提前停止，减少不必要的 API 调用
-- **批量处理优化**：减少速率限制检查频率（每 10 次检查一次）
+- **批量处理优化**：减少速率限制检查频率（GitHub 每 10 次检查一次）
 - **去重逻辑**：对于 `user_repos` 的 `both` 模式，自动去重（owned 优先级高于 starred）
+- **平台统一接口**：通过 `provider` 参数选择平台，保持接口一致性
 
 ---
 

@@ -1,6 +1,7 @@
 """Git MCP Tool - Structured Git operations via Model Context Protocol."""
 
 from .models import (
+    CatalogProvider,
     Cmd,
     CmdCatalog,
     DiffScope,
@@ -27,6 +28,7 @@ __all__ = [
     "GitCatalogInput",
     "Cmd",
     "CmdCatalog",
+    "CatalogProvider",
     "FlowAction",
     "FlowProvider",
     "WorkLogProvider",

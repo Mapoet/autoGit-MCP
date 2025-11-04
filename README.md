@@ -7,7 +7,7 @@
 - **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `status`、`add`、`commit`、`pull`、`push`、`fetch`、`merge`、`rebase`、`diff`、`log`、`branch`、`switch`、`tag`、`reset`、`revert`、`clean`、`remote`、`stash`、`submodule`、`cherry-pick` 等命令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
 - **`git_work` 工具**：从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
-- **`git_catalog` 工具**：GitHub 活动/仓库目录查询工具，支持 7 个子命令查询 GitHub 仓库和提交活动。包括跨仓库提交明细、仓库作者统计、关键词搜索、组织仓库列表、用户拥有/Star 项目列表等功能。
+- **`git_catalog` 工具**：GitHub/Gitee 活动/仓库目录查询工具，支持 7 个子命令查询 GitHub 或 Gitee 仓库和提交活动。包括跨仓库提交明细、仓库作者统计、关键词搜索、组织仓库列表、用户拥有/Star 项目列表等功能。
 - **FastMCP Server**：基于 `mcp.server.fastmcp.FastMCP` 暴露工具，使用 HTTP/SSE 协议，便于与任意兼容 MCP 的客户端集成。
 - **完善的错误处理**：所有工具都包含全面的异常捕获和友好的错误消息返回。
 - **代码结构优化**：采用关注点分离设计，接口定义与实现逻辑分离，便于维护和扩展。
@@ -90,14 +90,19 @@ export GITEE_TOKEN="your-gitee-personal-access-token"       # 必填（访问私
 
 #### `git_catalog` 工具所需环境变量
 
-`git_catalog` 工具用于查询 GitHub 仓库和提交活动，需要配置 GitHub API 访问：
+`git_catalog` 工具用于查询 GitHub 或 Gitee 仓库和提交活动，需要配置相应的 API 访问：
 
 ```bash
 # GitHub API 访问（提高速率限制并访问私有仓库）
-export GITHUB_TOKEN="your-github-personal-access-token"     # 可选，但强烈建议设置
+export GITHUB_TOKEN="your-github-personal-access-token"     # 可选，但强烈建议设置（使用 provider='github' 时）
+
+# Gitee API 访问（访问私有仓库时必填）
+export GITEE_TOKEN="your-gitee-personal-access-token"       # 访问私有仓库时必填（使用 provider='gitee' 时）
 ```
 
-> **注意**：未设置 `GITHUB_TOKEN` 时，工具会使用匿名访问（速率限制 60/h）。设置 token 可提高到 5000/h 并访问私有仓库。
+> **注意**：
+> - GitHub：未设置 `GITHUB_TOKEN` 时，工具会使用匿名访问（速率限制 60/h）。设置 token 可提高到 5000/h 并访问私有仓库。
+> - Gitee：访问公开仓库可以不设置 token，但访问私有仓库时必填 `GITEE_TOKEN`。
 
 > **注意**：
 > - `git` 工具不需要任何环境变量
@@ -242,10 +247,11 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ### `git_catalog` 工具
 
-#### 搜索仓库
+#### 搜索仓库（GitHub）
 
 ```json
 {
+  "provider": "github",
   "cmd": "search_repos",
   "args": {
     "keyword": "gnss",
@@ -256,10 +262,25 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 }
 ```
 
+#### 搜索仓库（Gitee）
+
+```json
+{
+  "provider": "gitee",
+  "cmd": "search_repos",
+  "args": {
+    "keyword": "gnss",
+    "language": "C++",
+    "limit": 200
+  }
+}
+```
+
 #### 列出组织仓库
 
 ```json
 {
+  "provider": "github",
   "cmd": "org_repos",
   "args": {
     "org": "tensorflow",
@@ -273,6 +294,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ```json
 {
+  "provider": "github",
   "cmd": "user_repos",
   "args": {
     "login": "mapoet",
@@ -290,6 +312,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ```json
 {
+  "provider": "github",
   "cmd": "cross_repos",
   "args": {
     "author_login": "octocat",
@@ -495,9 +518,9 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 `stdout` 包含完整的 Markdown 格式工作日志，如果启用了 `add_summary`，会在日志末尾包含 AI 生成的中文总结。
 
-## 🔍 `git_catalog` GitHub 仓库目录查询
+## 🔍 `git_catalog` GitHub/Gitee 仓库目录查询
 
-`git_catalog` 工具提供了统一的 GitHub 活动/仓库目录查询接口，支持 7 个子命令查询 GitHub 仓库和提交活动。
+`git_catalog` 工具提供了统一的 GitHub/Gitee 活动/仓库目录查询接口，支持 7 个子命令查询 GitHub 或 Gitee 仓库和提交活动。
 
 ### 功能特性
 
@@ -514,6 +537,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 | 用途 | 环境变量 | 是否必填 | 说明 |
 | ---- | -------- | -------- | ---- |
 | GitHub API 访问 | `GITHUB_TOKEN` | 可选但强烈建议 | GitHub Personal Access Token。未设置时使用匿名访问（速率限制 60/h），设置后可提高到 5000/h 并访问私有仓库 |
+| Gitee API 访问 | `GITEE_TOKEN` | 条件必填 | Gitee Personal Access Token。访问公开仓库时可选，访问私有仓库时必填 |
 
 > **详细说明**：完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)，包含按工具分类的配置说明和使用场景示例。
 
@@ -523,6 +547,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ```jsonc
 {
+  "provider": "github" | "gitee",  // 代码托管平台提供商，默认 "github"
   "cmd": "search_repos" | "org_repos" | "cross_repos" | "repo_authors" | "repos_by_author" | "authors_by_repo" | "user_repos",
   "args": {
     // 参数取决于 cmd 值，详见下方说明
@@ -649,7 +674,13 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ## 🔄 版本更新
 
-### 最新改进（v1.3）
+### 最新改进（v1.4）
+
+- ✅ **`git_catalog` 工具支持 Gitee**：新增 Gitee 平台支持，所有 7 个子命令均可使用 Gitee API
+- ✅ **统一接口设计**：通过 `provider` 参数（github/gitee）选择平台，保持接口一致性
+- ✅ **完整的 Gitee API 实现**：实现了所有 7 个子命令的 Gitee 版本，包括搜索、组织、用户仓库等功能
+
+### 历史版本（v1.3）
 
 - ✅ **新增 `git_catalog` 工具**：支持 7 个子命令查询 GitHub 仓库和提交活动
 - ✅ **跨仓库提交查询**：支持查询指定作者在多个仓库中的提交记录

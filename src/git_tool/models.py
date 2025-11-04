@@ -483,9 +483,21 @@ class UserReposArgs(BaseModel):
     )
 
 
+class CatalogProvider(str, Enum):
+    """Provider for git_catalog tool."""
+
+    github = "github"
+    gitee = "gitee"
+
+
 class GitCatalogInput(BaseModel):
     """Validated input for git_catalog tool."""
 
+    provider: CatalogProvider = Field(
+        default=CatalogProvider.github,
+        description="代码托管平台提供商",
+        examples=["github", "gitee"],
+    )
     cmd: CmdCatalog = Field(
         description="子命令",
         examples=["search_repos", "org_repos", "cross_repos"],

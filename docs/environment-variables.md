@@ -14,7 +14,7 @@
 | `OPENGPT_MODEL` | `git_flow` | 可选 | OpenGPT 模型名称，默认：`gpt-4.1-mini` |
 | `OPENAI_API_KEY` | `git_work` | 条件必填 | OpenAI API Key，`git_work` 使用 OpenAI 时必填 |
 | `GITHUB_TOKEN` | `git_work`、`git_catalog` | 条件必填 | GitHub Personal Access Token，访问私有 GitHub 仓库时必填（`git_catalog` 工具强烈建议设置以提高速率限制） |
-| `GITEE_TOKEN` | `git_work` | 条件必填 | Gitee Personal Access Token，访问私有 Gitee 仓库时必填 |
+| `GITEE_TOKEN` | `git_work`、`git_catalog` | 条件必填 | Gitee Personal Access Token，访问私有 Gitee 仓库时必填 |
 
 ## 按工具分类
 
@@ -100,7 +100,7 @@ export GITEE_TOKEN="your-gitee-token"                 # 访问私有仓库时必
 
 ### `git_catalog` 工具
 
-`git_catalog` 工具用于查询 GitHub 仓库和提交活动。
+`git_catalog` 工具用于查询 GitHub 或 Gitee 仓库和提交活动。
 
 #### GitHub API 访问
 
@@ -109,7 +109,7 @@ export GITHUB_TOKEN="ghp_xxxxx"                       # 可选，但强烈建议
 ```
 
 **使用场景**：
-- 所有 `git_catalog` 子命令都可以使用
+- `git_catalog` 调用中设置 `provider="github"`（默认）
 - 未设置时使用匿名访问（速率限制 60/h）
 - 设置后可提高到 5000/h 并访问私有仓库
 - 访问公开仓库时可选，但建议设置以避免 API 速率限制
@@ -117,6 +117,17 @@ export GITHUB_TOKEN="ghp_xxxxx"                       # 可选，但强烈建议
 **速率限制说明**：
 - 匿名访问：60 次/小时
 - 认证访问（使用 token）：5000 次/小时
+
+#### Gitee API 访问
+
+```bash
+export GITEE_TOKEN="your-gitee-token"                 # 访问私有仓库时必填
+```
+
+**使用场景**：
+- `git_catalog` 调用中设置 `provider="gitee"`
+- 访问公开仓库时可选
+- 访问私有仓库时必填
 
 ## 配置示例
 
@@ -155,7 +166,14 @@ export GITHUB_TOKEN="ghp_xxxxx"
 export GITHUB_TOKEN="ghp_xxxxx"
 ```
 
-### 场景 6：完整配置（所有功能）
+### 场景 6：使用 `git_catalog` 查询 Gitee 仓库
+
+```bash
+# Gitee API 访问（访问私有仓库时必填）
+export GITEE_TOKEN="your-gitee-token"
+```
+
+### 场景 7：完整配置（所有功能）
 
 ```bash
 # git_flow 和 git_work 的 LLM（DeepSeek）
@@ -179,8 +197,10 @@ export GITEE_TOKEN="your-gitee-token"
 - **缺少 API Key**：`"错误：未提供 DeepSeek API key。请设置环境变量 DEEPSEEK_API_KEY"`
 - **缺少 GitHub Token**：
   - `git_work`：访问私有仓库时会失败，提示需要设置 `GITHUB_TOKEN`
-  - `git_catalog`：会使用匿名访问（速率限制较低），建议设置 token 以提高性能
-- **缺少 Gitee Token**：访问私有仓库时会失败，提示需要设置 `GITEE_TOKEN`
+  - `git_catalog`（provider='github'）：会使用匿名访问（速率限制较低），建议设置 token 以提高性能
+- **缺少 Gitee Token**：
+  - `git_work`：访问私有仓库时会失败，提示需要设置 `GITEE_TOKEN`
+  - `git_catalog`（provider='gitee'）：访问私有仓库时会失败，提示需要设置 `GITEE_TOKEN`
 
 ## 安全建议
 
