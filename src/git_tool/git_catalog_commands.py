@@ -1122,10 +1122,32 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
             while len(rows) < max_collect:
                 params = {"page": page, "per_page": 100, "type": "owner"}
                 resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
-                resp.raise_for_status()
+                
+                # 检查 HTTP 状态码
+                if resp.status_code == 404:
+                    # 用户不存在
+                    print(f"[warn] 用户 '{args.login}' 不存在或无法访问", file=sys.stderr)
+                    break
+                elif resp.status_code != 200:
+                    resp.raise_for_status()
+                
                 data = resp.json()
+                
+                # Gitee API 可能返回不同的格式
+                if isinstance(data, dict):
+                    # 如果返回的是字典，可能包含错误信息或不同的数据结构
+                    if "message" in data:
+                        print(f"[warn] Gitee API 返回错误: {data.get('message')}", file=sys.stderr)
+                        break
+                    # 可能数据在某个字段中
+                    if "data" in data:
+                        data = data["data"]
+                    elif "items" in data:
+                        data = data["items"]
+                    else:
+                        data = []
 
-                if not data:
+                if not data or not isinstance(data, list):
                     break
 
                 for repo in data:
@@ -1136,6 +1158,10 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
                 if len(data) < 100 or len(rows) >= max_collect:
                     break
                 page += 1
+        except requests.exceptions.HTTPError as e:
+            print(f"[warn] 获取 owned repos 失败 (HTTP {e.response.status_code}): {e}", file=sys.stderr)
+            if e.response.status_code == 404:
+                print(f"[warn] 用户 '{args.login}' 可能不存在", file=sys.stderr)
         except Exception as e:
             print(f"[warn] 获取 owned repos 失败: {e}", file=sys.stderr)
 
@@ -1149,10 +1175,29 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
             while len(rows) < max_collect:
                 params = {"page": page, "per_page": 100}
                 resp = requests.get(starred_url, headers=headers, params=params, timeout=30)
-                resp.raise_for_status()
+                
+                # 检查 HTTP 状态码
+                if resp.status_code == 404:
+                    print(f"[warn] 用户 '{args.login}' 的 starred repos 无法访问", file=sys.stderr)
+                    break
+                elif resp.status_code != 200:
+                    resp.raise_for_status()
+                
                 data = resp.json()
+                
+                # Gitee API 可能返回不同的格式
+                if isinstance(data, dict):
+                    if "message" in data:
+                        print(f"[warn] Gitee API 返回错误: {data.get('message')}", file=sys.stderr)
+                        break
+                    if "data" in data:
+                        data = data["data"]
+                    elif "items" in data:
+                        data = data["items"]
+                    else:
+                        data = []
 
-                if not data:
+                if not data or not isinstance(data, list):
                     break
 
                 for repo in data:
@@ -1163,6 +1208,8 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
                 if len(data) < 100 or len(rows) >= max_collect:
                     break
                 page += 1
+        except requests.exceptions.HTTPError as e:
+            print(f"[warn] 获取 starred repos 失败 (HTTP {e.response.status_code}): {e}", file=sys.stderr)
         except Exception as e:
             print(f"[warn] 获取 starred repos 失败: {e}", file=sys.stderr)
 
@@ -1278,13 +1325,31 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
             "stderr": f"GitHub API 错误: {str(e)}",
         }, ensure_ascii=False)
 
+    except requests.exceptions.HTTPError as e:
+        # Gitee API HTTP 错误（包含状态码信息）
+        error_msg = f"Gitee API HTTP 错误: {e.response.status_code}"
+        if e.response.status_code == 404:
+            error_msg += " (用户不存在或资源未找到)"
+        try:
+            error_detail = e.response.json()
+            if "message" in error_detail:
+                error_msg += f" - {error_detail['message']}"
+        except Exception:
+            error_msg += f" - {str(e)}"
+        return json.dumps({
+            "exit_code": 1,
+            "count": 0,
+            "rows": [],
+            "stderr": error_msg,
+        }, ensure_ascii=False)
+    
     except requests.exceptions.RequestException as e:
         # Gitee API 网络错误
         return json.dumps({
             "exit_code": 1,
             "count": 0,
             "rows": [],
-            "stderr": f"Gitee API 错误: {str(e)}",
+            "stderr": f"Gitee API 网络错误: {str(e)}",
         }, ensure_ascii=False)
 
     except Exception as e:
