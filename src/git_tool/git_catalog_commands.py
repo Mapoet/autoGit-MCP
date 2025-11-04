@@ -622,12 +622,40 @@ def _fetch_user_activity_across_repos_gitee(
     if not owner:
         raise ValueError("必须提供 owner 或 author_login")
 
-    # 获取用户的仓库列表
-    repos_url = f"{base_url}/users/{owner}/repos"
+    # 关键修复：如果查询的是自己的仓库且需要私有库（repo_type=all），使用 /user/repos 接口
+    # /users/{username}/repos 接口即使使用 token，也无法获取其他用户的私有库
+    # 只有 /user/repos 接口可以获取当前用户自己的所有仓库（包括私有）
+    use_own_repos_endpoint = False
+    token_available = bool(client.get("token"))
+    if token_available and args.repo_type == "all":
+        # 获取当前用户信息，检查是否查询的是自己的仓库
+        try:
+            user_info_url = f"{base_url}/user"
+            user_params = _add_gitee_auth({}, client)
+            user_resp = requests.get(user_info_url, headers=headers, params=user_params, timeout=10)
+            if user_resp.status_code == 200:
+                current_user_login = user_resp.json().get("login", "")
+                if current_user_login and current_user_login.lower() == owner.lower():
+                    use_own_repos_endpoint = True
+        except Exception:
+            # 如果获取用户信息失败，继续使用原来的接口
+            pass
+    
+    # 根据情况选择正确的 API 端点
+    if use_own_repos_endpoint:
+        repos_url = f"{base_url}/user/repos"
+    else:
+        repos_url = f"{base_url}/users/{owner}/repos"
+    
     page = 1
     repos = []
     while True:
-        params = {"page": page, "per_page": 100, "type": args.repo_type}
+        params = {"page": page, "per_page": 100}
+        if use_own_repos_endpoint:
+            # 使用 /user/repos 接口时，type=all 可以获取所有仓库（包括私有）
+            params["type"] = "all"
+        else:
+            params["type"] = args.repo_type
         params = _add_gitee_auth(params, client)
         try:
             resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
@@ -1141,12 +1169,40 @@ def _list_repos_for_author_gitee(
     since = parse_dt(args.since)
     until = parse_dt(args.until)
 
-    # 获取用户的仓库列表
-    repos_url = f"{base_url}/users/{owner}/repos"
+    # 关键修复：如果查询的是自己的仓库且需要私有库（repo_type=all），使用 /user/repos 接口
+    # /users/{username}/repos 接口即使使用 token，也无法获取其他用户的私有库
+    # 只有 /user/repos 接口可以获取当前用户自己的所有仓库（包括私有）
+    use_own_repos_endpoint = False
+    token_available = bool(client.get("token"))
+    if token_available and args.repo_type == "all":
+        # 获取当前用户信息，检查是否查询的是自己的仓库
+        try:
+            user_info_url = f"{base_url}/user"
+            user_params = _add_gitee_auth({}, client)
+            user_resp = requests.get(user_info_url, headers=headers, params=user_params, timeout=10)
+            if user_resp.status_code == 200:
+                current_user_login = user_resp.json().get("login", "")
+                if current_user_login and current_user_login.lower() == owner.lower():
+                    use_own_repos_endpoint = True
+        except Exception:
+            # 如果获取用户信息失败，继续使用原来的接口
+            pass
+    
+    # 根据情况选择正确的 API 端点
+    if use_own_repos_endpoint:
+        repos_url = f"{base_url}/user/repos"
+    else:
+        repos_url = f"{base_url}/users/{owner}/repos"
+    
     page = 1
     repos = []
     while True:
-        params = {"page": page, "per_page": 100, "type": args.repo_type}
+        params = {"page": page, "per_page": 100}
+        if use_own_repos_endpoint:
+            # 使用 /user/repos 接口时，type=all 可以获取所有仓库（包括私有）
+            params["type"] = "all"
+        else:
+            params["type"] = args.repo_type
         params = _add_gitee_auth(params, client)
         try:
             resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
@@ -1344,7 +1400,17 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
         # Gitee API 可能返回 None，需要处理
         archived = repo_data.get("archived") or False
         is_fork = repo_data.get("fork") or False
-        is_private = repo_data.get("private") or False
+        # Gitee API 返回 private 和 public 字段，优先使用 private 字段
+        # 如果 private 字段不存在或为 None，则通过 public 字段判断（public=False 表示私有）
+        private_field = repo_data.get("private")
+        public_field = repo_data.get("public")
+        if private_field is not None:
+            is_private = bool(private_field)
+        elif public_field is not None:
+            is_private = not bool(public_field)
+        else:
+            # 如果两个字段都不存在，默认认为是公开的
+            is_private = False
         
         if (not args.include_archived) and archived:
             return False
@@ -1378,10 +1444,33 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
     # owned
     if args.mode in ("owned", "both"):
         try:
-            repos_url = f"{base_url}/users/{args.login}/repos"
             page = 1
             max_collect = args.limit + 50 if args.mode == "both" else args.limit
             token_available = bool(client.get("token"))
+            
+            # 关键修复：如果查询的是自己的仓库且需要私有库，使用 /user/repos 接口
+            # /users/{username}/repos 接口即使使用 token，也无法获取其他用户的私有库
+            # 只有 /user/repos 接口可以获取当前用户自己的所有仓库（包括私有）
+            use_own_repos_endpoint = False
+            if token_available and args.include_private:
+                # 获取当前用户信息，检查是否查询的是自己的仓库
+                try:
+                    user_info_url = f"{base_url}/user"
+                    user_params = _add_gitee_auth({}, client)
+                    user_resp = requests.get(user_info_url, headers=headers, params=user_params, timeout=10)
+                    if user_resp.status_code == 200:
+                        current_user_login = user_resp.json().get("login", "")
+                        if current_user_login and current_user_login.lower() == args.login.lower():
+                            use_own_repos_endpoint = True
+                except Exception:
+                    # 如果获取用户信息失败，继续使用原来的接口
+                    pass
+            
+            # 根据情况选择正确的 API 端点
+            if use_own_repos_endpoint:
+                repos_url = f"{base_url}/user/repos"
+            else:
+                repos_url = f"{base_url}/users/{args.login}/repos"
 
             while len(rows) < max_collect:
                 # Gitee API: 不带 type 参数时返回公开仓库（无需认证）
@@ -1392,8 +1481,13 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
                 # 如果 token 无效，降级为只获取公开仓库
                 use_private_query = token_available and args.include_private
                 
-                if use_private_query:
+                if use_own_repos_endpoint:
+                    # 使用 /user/repos 接口时，type=all 可以获取所有仓库（包括私有）
+                    params["type"] = "all"
+                    params = _add_gitee_auth(params, client)
+                elif use_private_query:
                     # 尝试获取私有仓库：使用 type=all
+                    # 注意：这只能获取公开库，因为 /users/{username}/repos 不支持获取其他用户的私有库
                     params["type"] = "all"
                     params = _add_gitee_auth(params, client)
                 elif token_available:
@@ -1407,26 +1501,22 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
                 # 检查 HTTP 状态码
                 if resp.status_code == 401:
                     # Token 无效或权限不足
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        # 如果有明确的 token 错误信息，直接抛出
+                        raise ValueError(token_error)
+                    
+                    # 如果用户明确要求包含私有仓库，且返回 401，说明 token 无效
                     if use_private_query:
-                        # 如果尝试获取私有仓库失败，降级为只获取公开仓库
-                        print(f"[warn] Token 无效或权限不足，无法获取私有仓库，仅返回公开仓库", file=sys.stderr)
-                        # 重试：不带 token 和 type，只获取公开仓库
-                        params = {"page": page, "per_page": 100}
-                        resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
-                        if resp.status_code != 200:
-                            resp.raise_for_status()
-                    else:
-                        # 如果只是查询公开仓库但返回 401，可能是 token 格式问题
-                        token_error = _check_gitee_token_error(resp)
-                        if token_error:
-                            # 尝试不带 token 重试
-                            print(f"[warn] {token_error}，尝试仅获取公开仓库", file=sys.stderr)
-                            params = {"page": page, "per_page": 100}
-                            resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
-                            if resp.status_code != 200:
-                                resp.raise_for_status()
-                        else:
-                            raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                        raise ValueError("Gitee API 认证失败。请检查：\n1. GITEE_TOKEN 环境变量是否正确设置\n2. Token 是否有效（可能已过期）\n3. Token 是否有足够的权限（需要访问私有仓库的权限）\n\n可以在 https://gitee.com/profile/personal_access_tokens 检查 token 状态")
+                    
+                    # 如果只是查询公开仓库但返回 401，可能是 token 格式问题
+                    # 尝试不带 token 重试（降级策略）
+                    print(f"[warn] Token 认证失败，尝试仅获取公开仓库", file=sys.stderr)
+                    params = {"page": page, "per_page": 100}
+                    resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+                    if resp.status_code != 200:
+                        resp.raise_for_status()
                 elif resp.status_code == 404:
                     # 用户不存在
                     print(f"[warn] 用户 '{args.login}' 不存在或无法访问", file=sys.stderr)
