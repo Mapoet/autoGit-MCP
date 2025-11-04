@@ -7,6 +7,9 @@ uvicorn[standard]>=0.27.0     # ASGI server for FastMCP
 GitPython>=3.1.40             # Git repository operations
 requests>=2.31.0              # HTTP requests for GitHub/Gitee API
 
+# Date parsing (required for git_catalog tool)
+python-dateutil>=2.8.0       # Date parsing for git_catalog tool
+
 # Optional dependencies for LLM providers
 # Install based on which provider you plan to use:
 
@@ -14,8 +17,8 @@ requests>=2.31.0              # HTTP requests for GitHub/Gitee API
 # Only needed if using OpenAI provider for git_work AI summary
 openai>=1.0.0                 # OpenAI API client
 
-# For GitHub support (git_work tool)
-# Only needed if accessing GitHub repositories in git_work
+# For GitHub support (git_work and git_catalog tools)
+# Only needed if accessing GitHub repositories in git_work or git_catalog
 PyGithub>=2.0.0              # GitHub API client
 
 # Note: Gitee support uses requests library (already included above)

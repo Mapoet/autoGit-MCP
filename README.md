@@ -7,6 +7,7 @@
 - **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `status`、`add`、`commit`、`pull`、`push`、`fetch`、`merge`、`rebase`、`diff`、`log`、`branch`、`switch`、`tag`、`reset`、`revert`、`clean`、`remote`、`stash`、`submodule`、`cherry-pick` 等命令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
 - **`git_work` 工具**：从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
+- **`git_catalog` 工具**：GitHub 活动/仓库目录查询工具，支持 7 个子命令查询 GitHub 仓库和提交活动。包括跨仓库提交明细、仓库作者统计、关键词搜索、组织仓库列表、用户拥有/Star 项目列表等功能。
 - **FastMCP Server**：基于 `mcp.server.fastmcp.FastMCP` 暴露工具，使用 HTTP/SSE 协议，便于与任意兼容 MCP 的客户端集成。
 - **完善的错误处理**：所有工具都包含全面的异常捕获和友好的错误消息返回。
 - **代码结构优化**：采用关注点分离设计，接口定义与实现逻辑分离，便于维护和扩展。
@@ -30,7 +31,8 @@ pip install -r requirements.txt
 
 **可选依赖（根据使用场景安装）**：
 - `openai` - OpenAI API 客户端（`git_work` 工具使用 OpenAI 时）
-- `PyGithub` - GitHub API 客户端（`git_work` 工具访问 GitHub 时）
+- `PyGithub` - GitHub API 客户端（`git_work` 和 `git_catalog` 工具访问 GitHub 时）
+- `python-dateutil` - 日期解析（`git_catalog` 工具必需）
 
 > **注意**：`mcp` 包已包含 FastAPI，无需单独安装。
 
@@ -86,9 +88,21 @@ export GITHUB_TOKEN="your-github-personal-access-token"     # 必填（访问私
 export GITEE_TOKEN="your-gitee-personal-access-token"       # 必填（访问私有仓库时）
 ```
 
+#### `git_catalog` 工具所需环境变量
+
+`git_catalog` 工具用于查询 GitHub 仓库和提交活动，需要配置 GitHub API 访问：
+
+```bash
+# GitHub API 访问（提高速率限制并访问私有仓库）
+export GITHUB_TOKEN="your-github-personal-access-token"     # 可选，但强烈建议设置
+```
+
+> **注意**：未设置 `GITHUB_TOKEN` 时，工具会使用匿名访问（速率限制 60/h）。设置 token 可提高到 5000/h 并访问私有仓库。
+
 > **注意**：
 > - `git` 工具不需要任何环境变量
 > - 访问公开的 GitHub/Gitee 仓库可以不设置 token，但设置了 token 可以避免 API 速率限制
+> - `git_catalog` 工具未设置 token 时使用匿名访问（速率限制较低），建议设置 token 以提高性能
 > - 所有环境变量都是可选的，只有在使用对应功能时才需要配置
 > - 完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)
 
@@ -114,7 +128,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 }
 ```
 
-重启客户端后，即可使用 `git`、`git_flow` 和 `git_work` 工具。
+重启客户端后，即可使用 `git`、`git_flow`、`git_work` 和 `git_catalog` 工具。
 
 ## 📖 使用示例
 
@@ -248,6 +262,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
     ├── git_commands.py            # git 工具实现
     ├── git_flow_commands.py       # git_flow 工具实现
     ├── git_gitwork_commands.py    # git_work 工具实现
+    ├── git_catalog_commands.py   # git_catalog 工具实现
     ├── git_combos.py              # Git 组合命令模板
     └── prompt_profiles.py        # 提示词配置模板
 ```
@@ -259,6 +274,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 - **`git_commands.py`**：git 工具的所有实现逻辑和异常处理
 - **`git_flow_commands.py`**：git_flow 工具的所有实现逻辑和 LLM 调用
 - **`git_gitwork_commands.py`**：git_work 工具的所有实现逻辑，包括提交收集、会话计算、AI 总结生成
+- **`git_catalog_commands.py`**：git_catalog 工具的所有实现逻辑，包括 GitHub API 调用、数据收集和格式化
 
 详细的代码结构说明请参考 [`docs/code-structure.md`](docs/code-structure.md)。
 
@@ -418,6 +434,122 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 `stdout` 包含完整的 Markdown 格式工作日志，如果启用了 `add_summary`，会在日志末尾包含 AI 生成的中文总结。
 
+## 🔍 `git_catalog` GitHub 仓库目录查询
+
+`git_catalog` 工具提供了统一的 GitHub 活动/仓库目录查询接口，支持 7 个子命令查询 GitHub 仓库和提交活动。
+
+### 功能特性
+
+- **跨仓库提交查询**：查询指定作者在多个仓库中的提交记录（明细）
+- **仓库作者统计**：查询指定仓库中多个作者的提交记录（明细）
+- **作者活跃仓库列表**：列出指定作者活跃的仓库及其提交数
+- **仓库活跃作者列表**：列出指定仓库中的活跃作者及其提交数
+- **关键词搜索仓库**：根据关键词、语言、Star 数等条件搜索仓库
+- **组织仓库列表**：列出指定组织的所有仓库
+- **用户拥有/Star 项目列表**：列出指定用户拥有或 Star 的仓库，支持合并查询和多种过滤排序选项
+
+### 环境变量
+
+| 用途 | 环境变量 | 是否必填 | 说明 |
+| ---- | -------- | -------- | ---- |
+| GitHub API 访问 | `GITHUB_TOKEN` | 可选但强烈建议 | GitHub Personal Access Token。未设置时使用匿名访问（速率限制 60/h），设置后可提高到 5000/h 并访问私有仓库 |
+
+### 工具参数
+
+`git_catalog` 接口签名如下：
+
+```jsonc
+{
+  "cmd": "search_repos" | "org_repos" | "cross_repos" | "repo_authors" | "repos_by_author" | "authors_by_repo" | "user_repos",
+  "args": {
+    // 参数取决于 cmd 值，详见下方说明
+  }
+}
+```
+
+#### 子命令说明
+
+**1. `search_repos` - 关键词检索仓库**
+- `keyword`*: 关键词（匹配 name/description/readme）
+- `language`: 语言限定（如 "Python", "C++", "TypeScript"）
+- `min_stars`: 最小 Star 数
+- `pushed_since`: 最近活跃起始时间
+- `topic`: 限定 topic
+- `owner`: 限定用户或组织域
+- `sort`: 排序字段（"updated" | "stars" | "forks"）
+- `order`: 排序方向（"desc" | "asc"）
+- `limit`: 最多返回条数（1-2000，默认 200）
+
+**2. `org_repos` - 组织仓库列表**
+- `org`*: 组织名
+- `repo_type`: 仓库类型（"all" | "public" | "private" | "forks" | "sources" | "member"）
+- `include_archived`: 是否包含 archived 仓库（默认 false）
+- `sort`: 排序字段（"updated" | "pushed" | "full_name"）
+- `limit`: 最多返回条数（1-5000，默认 500）
+
+**3. `cross_repos` - 不同仓库同一作者（提交明细）**
+- `author_login`: 作者 GitHub 登录名
+- `author_email`: 作者邮箱（更稳定）
+- `owner`: 枚举此 owner 的仓库（用户或组织）
+- `repo_type`: 仓库类型（"owner" | "member" | "all" | "public" | "private"）
+- `max_per_repo`: 每仓最多抓取条数（1-5000，默认 1000）
+- `since`: 起始时间（ISO 或日期格式）
+- `until`: 结束时间（ISO 或日期格式）
+
+**4. `repo_authors` - 同一仓库不同作者（提交明细）**
+- `repo_full`*: 仓库全名（格式 "owner/name"）
+- `authors_login`: 作者登录名列表
+- `authors_emails`: 作者邮箱列表
+- `max_per_author`: 每作者最多抓取条数（1-5000，默认 1000）
+- `since`: 起始时间
+- `until`: 结束时间
+
+**5. `repos_by_author` - 同一作者在哪些仓库（列表）**
+- `author_login`: 作者登录名
+- `author_email`: 作者邮箱
+- `owner`: 枚举此 owner 的仓库
+- `repo_type`: 仓库类型
+- `min_commits`: 最小提交数阈值（1-10000，默认 1）
+- `since`: 起始时间
+- `until`: 结束时间
+
+**6. `authors_by_repo` - 同一仓库活跃作者（列表）**
+- `repo_full`*: 仓库全名
+- `prefer`: 作者主键偏好（"login" | "email" | "name"）
+- `min_commits`: 最小提交数阈值（1-10000，默认 1）
+- `since`: 起始时间
+- `until`: 结束时间
+
+**7. `user_repos` - 作者拥有或 Star 的项目列表**
+- `login`*: GitHub 用户登录名
+- `mode`: 查询模式（"owned" | "starred" | "both"，默认 "both"）
+- `include_private`: 是否包含私有仓库（需要 token 权限，默认 false）
+- `include_archived`: 是否包含 archived 仓库（默认 true）
+- `include_forks`: 是否包含 fork 仓库（默认 true）
+- `sort`: 排序字段（"updated" | "pushed" | "full_name" | "stars"）
+- `order`: 排序方向（"desc" | "asc"）
+- `limit`: 最多返回条数（1-5000，默认 500）
+
+> 字段标记说明：* 表示必填字段。
+
+调用成功会返回如下结构：
+
+```jsonc
+{
+  "exit_code": 0,
+  "count": 10,
+  "rows": [
+    {
+      // 字段取决于子命令类型
+      // search_repos/org_repos/user_repos: full_name, name, description, language, stargazers_count, etc.
+      // cross_repos/repo_authors: repo, sha, date, author_login, title, url, etc.
+      // repos_by_author: repo, commits
+      // authors_by_repo: repo, author_key, author_login, author_email, commits
+    }
+  ]
+}
+```
+
 ## 🛡️ 安全特性
 
 ### 危险命令防护
@@ -454,7 +586,17 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ## 🔄 版本更新
 
-### 最新改进（v1.2）
+### 最新改进（v1.3）
+
+- ✅ **新增 `git_catalog` 工具**：支持 7 个子命令查询 GitHub 仓库和提交活动
+- ✅ **跨仓库提交查询**：支持查询指定作者在多个仓库中的提交记录
+- ✅ **仓库作者统计**：支持查询仓库中多个作者的提交活动
+- ✅ **关键词搜索**：支持根据关键词、语言、Star 数等条件搜索仓库
+- ✅ **组织仓库列表**：支持列出指定组织的所有仓库
+- ✅ **用户拥有/Star 项目**：支持查询用户拥有或 Star 的仓库，支持合并查询和去重
+- ✅ **速率限制优化**：优化 API 调用频率，减少速率限制检查开销
+
+### 历史版本（v1.2）
 
 - ✅ **新增 `git_work` 工具**：支持从本地/GitHub/Gitee 收集提交并生成工作日志
 - ✅ **工作会话分析**：自动计算工作会话，检测并行工作时间

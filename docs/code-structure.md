@@ -12,6 +12,7 @@ src/git_tool/
 ├── git_commands.py      # git 工具的实现逻辑
 ├── git_flow_commands.py # git_flow 工具的实现逻辑
 ├── git_gitwork_commands.py # git_work 工具的实现逻辑
+├── git_catalog_commands.py # git_catalog 工具的实现逻辑
 ├── git_combos.py        # Git 组合命令模板（已存在）
 └── prompt_profiles.py  # 提示词配置文件（已存在）
 ```
@@ -47,6 +48,9 @@ src/git_tool/
 - `GitFlowInput` - git_flow 工具的输入模型
 - `WorkLogProvider` - git_work AI 提供者枚举
 - `WorkLogInput` - git_work 工具的输入模型
+- `CmdCatalog` - git_catalog 子命令枚举
+- `GitCatalogInput` - git_catalog 工具的输入模型
+- `CrossReposArgs`, `RepoAuthorsArgs`, `ReposByAuthorArgs`, `AuthorsByRepoArgs`, `SearchReposArgs`, `OrgReposArgs`, `UserReposArgs` - 各子命令的参数模型
 
 ### `git_commands.py` - git 工具实现
 
@@ -96,6 +100,35 @@ src/git_tool/
 - `_render_markdown_gitwork` / `_render_multi_project_gitwork` - 渲染 Markdown 格式的工作日志
 - `execute_work_log_command` - 主要执行函数，包含完整的异常处理
 
+### `git_catalog_commands.py` - git_catalog 工具实现
+
+**职责**：
+- 实现 GitHub 客户端初始化（`gh_client`）
+- 实现时间解析（`parse_dt`）
+- 实现速率限制保护（`rate_limit_guard`）
+- 实现 7 个子命令的具体逻辑：
+  - `_fetch_user_activity_across_repos` - 跨仓库提交查询
+  - `_fetch_repo_activity_across_authors` - 仓库作者提交查询
+  - `_list_repos_for_author` - 作者活跃仓库列表
+  - `_list_authors_for_repo` - 仓库活跃作者列表
+  - `_search_repos_by_keyword` - 关键词搜索仓库
+  - `_list_repos_for_org` - 组织仓库列表
+  - `_list_user_repos` - 用户拥有/Star 项目列表
+- 实现 `execute_git_catalog_command` 函数（主要入口，包含异常处理）
+
+**关键函数**：
+- `gh_client` - 创建 GitHub API 客户端（支持 token 认证）
+- `parse_dt` - 解析时间字符串为 datetime 对象
+- `rate_limit_guard` - 速率限制保护和自动休眠
+- `_fetch_user_activity_across_repos` - 查询指定作者在多个仓库中的提交记录
+- `_fetch_repo_activity_across_authors` - 查询指定仓库中多个作者的提交记录
+- `_list_repos_for_author` - 列出指定作者活跃的仓库及其提交数
+- `_list_authors_for_repo` - 列出指定仓库中的活跃作者及其提交数
+- `_search_repos_by_keyword` - 根据关键词、语言、Star 数等条件搜索仓库
+- `_list_repos_for_org` - 列出指定组织的所有仓库
+- `_list_user_repos` - 列出指定用户拥有或 Star 的仓库，支持合并查询和去重
+- `execute_git_catalog_command` - 主要执行函数，包含完整的异常处理
+
 ## 代码组织优势
 
 ### 1. 关注点分离
@@ -115,6 +148,7 @@ src/git_tool/
 - 新增 Git 命令：只需在 `git_commands.py` 中添加新的映射函数
 - 新增 git_flow 操作：只需在 `git_flow_commands.py` 中扩展
 - 新增 git_work 功能：只需在 `git_gitwork_commands.py` 中扩展
+- 新增 git_catalog 子命令：只需在 `git_catalog_commands.py` 中添加新的实现函数
 - 新增数据模型：在 `models.py` 中添加
 
 ### 4. 可测试性
@@ -134,10 +168,13 @@ server.py
   │     ├── models.py (使用数据模型)
   │     ├── git_combos.py (组合命令模板)
   │     └── prompt_profiles.py (提示词配置)
-  └── git_gitwork_commands.py (git_work 实现)
+  ├── git_gitwork_commands.py (git_work 实现)
+  │     ├── models.py (使用数据模型)
+  │     ├── GitPython (使用 Repo)
+  │     └── requests (GitHub/Gitee API)
+  └── git_catalog_commands.py (git_catalog 实现)
         ├── models.py (使用数据模型)
-        ├── GitPython (使用 Repo)
-        └── requests (GitHub/Gitee API)
+        └── PyGithub (GitHub API)
 ```
 
 ## 使用示例
@@ -187,11 +224,12 @@ work_log_result = git_work(
 
 - **重构前**：所有代码都在 `server.py` 中（1266 行）
 - **重构后**：
-  - `server.py` - 约 400 行（仅接口定义，包含三个工具）
-  - `models.py` - 约 210 行（数据模型，包含 WorkLogInput）
+  - `server.py` - 约 650 行（仅接口定义，包含四个工具）
+  - `models.py` - 约 540 行（数据模型，包含所有工具的输入模型）
   - `git_commands.py` - 约 480 行（git 实现）
   - `git_flow_commands.py` - 约 530 行（git_flow 实现）
   - `git_gitwork_commands.py` - 约 1000 行（git_work 实现）
+  - `git_catalog_commands.py` - 约 580 行（git_catalog 实现）
 
 ## 注意事项
 

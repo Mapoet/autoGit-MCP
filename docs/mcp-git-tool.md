@@ -278,4 +278,134 @@ def _map_clean(args: Dict[str, Any], allow_destructive: bool) -> List[str]:
 
 ---
 
+## `git_catalog` GitHub 仓库目录查询工具
+
+除了 `git`、`git_flow` 和 `git_work`，项目还提供了 `git_catalog` 工具，用于查询 GitHub 仓库和提交活动。
+
+### 功能特性
+
+`git_catalog` 工具提供了统一的 GitHub 活动/仓库目录查询接口，支持 7 个子命令：
+
+1. **`cross_repos`** - 不同仓库同一作者（提交明细）：查询指定作者在多个仓库中的提交记录
+2. **`repo_authors`** - 同一仓库不同作者（提交明细）：查询指定仓库中多个作者的提交记录
+3. **`repos_by_author`** - 同一作者在哪些仓库（列表）：列出指定作者活跃的仓库及其提交数
+4. **`authors_by_repo`** - 同一仓库活跃作者（列表）：列出指定仓库中的活跃作者及其提交数
+5. **`search_repos`** - 关键词检索仓库：根据关键词、语言、Star 数等条件搜索仓库
+6. **`org_repos`** - 组织仓库列表：列出指定组织的所有仓库
+7. **`user_repos`** - 作者拥有或 Star 的项目列表：列出指定用户拥有或 Star 的仓库，支持合并查询和去重
+
+### 输入 Schema
+
+```jsonc
+{
+  "cmd": "search_repos" | "org_repos" | "cross_repos" | "repo_authors" | 
+         "repos_by_author" | "authors_by_repo" | "user_repos",
+  "args": {
+    // 参数取决于 cmd 值
+    // 详见 README.md 中的 git_catalog 工具说明
+  }
+}
+```
+
+### 输出 Schema
+
+```jsonc
+{
+  "exit_code": 0,
+  "count": 10,
+  "rows": [
+    {
+      // 字段取决于子命令类型
+      // search_repos/org_repos/user_repos: 
+      //   relation (仅 user_repos), full_name, name, owner, description, 
+      //   language, stargazers_count, forks_count, archived, private, 
+      //   updated_at, pushed_at, html_url
+      // cross_repos/repo_authors: 
+      //   repo, sha, date, author_login, author_name, author_email, 
+      //   committer_login, title, url
+      // repos_by_author: 
+      //   repo, commits
+      // authors_by_repo: 
+      //   repo, author_key, author_login, author_email, commits
+    }
+  ]
+}
+```
+
+### 环境变量
+
+- `GITHUB_TOKEN` - GitHub Personal Access Token（可选，但强烈建议设置）
+  - 未设置时使用匿名访问（速率限制 60/h）
+  - 设置后可提高到 5000/h 并访问私有仓库
+
+### 使用示例
+
+#### 搜索仓库
+
+```json
+{
+  "cmd": "search_repos",
+  "args": {
+    "keyword": "gnss",
+    "language": "C++",
+    "min_stars": 50,
+    "limit": 200
+  }
+}
+```
+
+#### 列出组织仓库
+
+```json
+{
+  "cmd": "org_repos",
+  "args": {
+    "org": "tensorflow",
+    "repo_type": "public",
+    "limit": 200
+  }
+}
+```
+
+#### 查询用户拥有或 Star 的项目
+
+```json
+{
+  "cmd": "user_repos",
+  "args": {
+    "login": "mapoet",
+    "mode": "both",
+    "include_archived": false,
+    "include_forks": true,
+    "sort": "stars",
+    "order": "desc",
+    "limit": 300
+  }
+}
+```
+
+#### 查询跨仓库提交明细
+
+```json
+{
+  "cmd": "cross_repos",
+  "args": {
+    "author_login": "octocat",
+    "owner": "github",
+    "since": "2025-01-01",
+    "until": "2025-11-04",
+    "max_per_repo": 1000
+  }
+}
+```
+
+### 性能优化
+
+- **速率限制保护**：自动检测并处理 GitHub API 速率限制
+- **提前退出策略**：在收集足够数据时提前停止，减少不必要的 API 调用
+- **批量处理优化**：减少速率限制检查频率（每 10 次检查一次）
+- **去重逻辑**：对于 `user_repos` 的 `both` 模式，自动去重（owned 优先级高于 starred）
+
+---
+
 更多最佳实践请参考 [Git 常用命令速查](git-cheatsheet.md)。

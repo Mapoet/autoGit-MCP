@@ -15,11 +15,14 @@ from pydantic import Field
 from .git_commands import execute_git_command
 from .git_flow_commands import execute_git_flow_command
 from .git_gitwork_commands import execute_work_log_command
+from .git_catalog_commands import execute_git_catalog_command
 from .models import (
     Cmd,
+    CmdCatalog,
     DiffScope,
     FlowAction,
     FlowProvider,
+    GitCatalogInput,
     GitFlowInput,
     GitInput,
     WorkLogInput,
@@ -110,6 +113,25 @@ async def rest_work_log(request: Request):
         )
 
 
+@rest_router.post("/git_catalog")
+async def rest_git_catalog(request: Request):
+    """REST API 端点：调用 git_catalog 工具（无需 session ID）"""
+    try:
+        body = await request.json()
+        result = git_catalog(
+            cmd=body.get("cmd"),
+            args=body.get("args", {}),
+        )
+        result_dict = json.loads(result)
+        return JSONResponse(content=result_dict)
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={"exit_code": 1, "count": 0, "rows": [], "stderr": f"错误: {str(e)}\n{traceback.format_exc()[-300:]}"}
+        )
+
+
 @rest_router.get("/tools")
 async def rest_list_tools():
     """REST API 端点：列出所有可用工具"""
@@ -117,7 +139,8 @@ async def rest_list_tools():
         "tools": [
             {"name": "git", "endpoint": "/api/git"},
             {"name": "git_flow", "endpoint": "/api/git_flow"},
-            {"name": "git_work", "endpoint": "/api/git_work"}
+            {"name": "git_work", "endpoint": "/api/git_work"},
+            {"name": "git_catalog", "endpoint": "/api/git_catalog"}
         ]
     })
 
@@ -494,16 +517,139 @@ def git_work(
         })
 
 
+@server.tool()
+def git_catalog(
+    cmd: Annotated[
+        str,
+        Field(
+            description="子命令。支持的子命令: 'cross_repos' (不同仓库同一作者明细), 'repo_authors' (同一仓库不同作者明细), 'repos_by_author' (同一作者在哪些仓库列表), 'authors_by_repo' (同一仓库活跃作者列表), 'search_repos' (关键词检索仓库), 'org_repos' (组织仓库列表), 'user_repos' (作者拥有或 Star 的项目列表)",
+            examples=["search_repos", "org_repos", "cross_repos", "user_repos"],
+        ),
+    ],
+    args: Annotated[
+        dict,
+        Field(
+            default_factory=dict,
+            description=(
+                "该子命令的参数对象。参数结构取决于 cmd 值。支持的子命令及其参数：\n\n"
+                "'cross_repos' (不同仓库同一作者明细): "
+                "{author_login: str (可选), author_email: str (可选), owner: str (可选), "
+                "repo_type: str (默认 'owner', 可选: 'owner'|'member'|'all'|'public'|'private'), "
+                "max_per_repo: int (默认 1000, 范围 1-5000), "
+                "since: str (可选, 起始时间 ISO 或日期如 '2025-01-01'), "
+                "until: str (可选, 结束时间 ISO 或日期如 '2025-11-04')} - "
+                "查询指定作者在多个仓库中的提交记录。author_login 和 author_email 至少提供一个；"
+                "owner 指定枚举的仓库范围（用户或组织），不填则默认枚举 author_login 的仓库。\n\n"
+                "'repo_authors' (同一仓库不同作者明细): "
+                "{repo_full: str* (必填, 格式 'owner/name'), "
+                "authors_login: List[str] (可选), authors_emails: List[str] (可选), "
+                "max_per_author: int (默认 1000, 范围 1-5000), "
+                "since: str (可选), until: str (可选)} - "
+                "查询指定仓库中多个作者的提交记录。如果不提供 authors_login 和 authors_emails，"
+                "则返回时间窗内所有提交。\n\n"
+                "'repos_by_author' (同一作者在哪些仓库列表): "
+                "{author_login: str (可选), author_email: str (可选), owner: str (可选), "
+                "repo_type: str (默认 'owner'), min_commits: int (默认 1, 范围 1-10000), "
+                "since: str (可选), until: str (可选)} - "
+                "列出指定作者活跃的仓库及其提交数（按提交数降序）。返回格式: {repo: str, commits: int}。\n\n"
+                "'authors_by_repo' (同一仓库活跃作者列表): "
+                "{repo_full: str* (必填, 格式 'owner/name'), "
+                "prefer: str (默认 'login', 可选: 'login'|'email'|'name' 作为主键), "
+                "min_commits: int (默认 1, 范围 1-10000), "
+                "since: str (可选), until: str (可选)} - "
+                "列出指定仓库中的活跃作者及其提交数（按提交数降序）。返回格式: "
+                "{repo: str, author_key: str, author_login: str, author_email: str, commits: int}。\n\n"
+                "'search_repos' (关键词检索仓库): "
+                "{keyword: str* (必填, 匹配 name/description/readme), "
+                "language: str (可选, 如 'Python'|'C++'|'TypeScript'), "
+                "min_stars: int (可选, 最小 Star 数), "
+                "pushed_since: str (可选, 最近活跃起始如 '2025-09-01'), "
+                "topic: str (可选, 限定 topic), owner: str (可选, 限定用户或组织域), "
+                "sort: str (默认 'updated', 可选: 'updated'|'stars'|'forks'), "
+                "order: str (默认 'desc', 可选: 'desc'|'asc'), "
+                "limit: int (默认 200, 范围 1-2000)} - "
+                "根据关键词、语言、Star 数等条件搜索仓库。\n\n"
+                "'org_repos' (组织仓库列表): "
+                "{org: str* (必填, 组织名), "
+                "repo_type: str (默认 'all', 可选: 'all'|'public'|'private'|'forks'|'sources'|'member'), "
+                "include_archived: bool (默认 false, 是否包含 archived 仓库), "
+                "sort: str (默认 'updated', 可选: 'updated'|'pushed'|'full_name'), "
+                "limit: int (默认 500, 范围 1-5000)} - "
+                "列出指定组织的所有仓库。\n\n"
+                "'user_repos' (作者拥有或 Star 的项目列表): "
+                "{login: str* (必填, GitHub 用户登录名), "
+                "mode: str (默认 'both', 可选: 'owned'|'starred'|'both'), "
+                "include_private: bool (默认 false, 是否包含私有仓库，需要 token 权限), "
+                "include_archived: bool (默认 true, 是否包含 archived 仓库), "
+                "include_forks: bool (默认 true, 是否包含 fork 仓库), "
+                "sort: str (默认 'updated', 可选: 'updated'|'pushed'|'full_name'|'stars'), "
+                "order: str (默认 'desc', 可选: 'desc'|'asc'), "
+                "limit: int (默认 500, 范围 1-5000)} - "
+                "列出指定用户拥有或 Star 的仓库列表。返回格式包含 relation 字段（'owned' 或 'starred'）标识来源。"
+                "当 mode='both' 时，会合并 owned 和 starred 的结果，然后统一排序和限量。\n\n"
+                "字段标记说明: * 表示必填字段。时间字段支持 ISO 格式（如 '2025-01-01T00:00:00Z'）"
+                "或简单日期格式（如 '2025-01-01'）。所有参数都经过类型验证，提供友好的错误消息。"
+            ),
+        ),
+    ],
+) -> str:
+    """GitHub 活动/仓库目录查询工具（PyGithub）。
+    
+    统一入口：支持 7 个子命令查询 GitHub 仓库和提交活动。
+    
+    子命令说明：
+    - cross_repos: 不同仓库同一作者（提交明细） - 查询指定作者在多个仓库中的提交记录
+    - repo_authors: 同一仓库不同作者（提交明细） - 查询指定仓库中多个作者的提交记录
+    - repos_by_author: 同一作者在哪些仓库活跃（列表） - 列出指定作者活跃的仓库及其提交数
+    - authors_by_repo: 同一仓库活跃作者（列表） - 列出指定仓库中的活跃作者及其提交数
+    - search_repos: 关键词搜索仓库 - 根据关键词、语言、Star 数等条件搜索仓库
+    - org_repos: 组织仓库列表 - 列出指定组织的所有仓库
+    - user_repos: 作者拥有或 Star 的项目列表 - 列出指定用户拥有或 Star 的仓库，支持合并查询和多种过滤排序选项
+    
+    认证：
+    - 使用环境变量 GITHUB_TOKEN（未设置则匿名，速率限制 60/h）
+    - 设置 token 可提高 API 速率限制并访问私有仓库
+    
+    返回格式：
+    - JSON 字符串，包含 exit_code（0 成功，非 0 失败）、count（记录条数）、rows（表格型数据数组）
+    - rows 数组中的每个对象代表一条记录，字段取决于子命令类型
+    """
+    try:
+        # 构建输入对象
+        payload = GitCatalogInput(cmd=CmdCatalog(cmd), args=args)
+        return execute_git_catalog_command(payload)
+    except ValueError as e:
+        # 参数验证错误（如 cmd 不是有效的枚举值）
+        return json.dumps({
+            "exit_code": 1,
+            "count": 0,
+            "rows": [],
+            "stderr": f"参数验证错误: {str(e)}",
+        }, ensure_ascii=False)
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        return json.dumps({
+            "exit_code": 1,
+            "count": 0,
+            "rows": [],
+            "stderr": f"git_catalog 工具执行错误: {type(e).__name__}: {str(e)}\n详细信息: {error_details[-500:]}",
+        }, ensure_ascii=False)
+
+
 __all__ = [
     "app",
     "server",
     "git",
     "git_flow",
     "git_work",
+    "git_catalog",
     "GitInput",
     "GitFlowInput",
     "WorkLogInput",
+    "GitCatalogInput",
     "Cmd",
+    "CmdCatalog",
     "FlowAction",
     "FlowProvider",
     "WorkLogProvider",

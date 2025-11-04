@@ -2,15 +2,17 @@
 
 from .models import (
     Cmd,
+    CmdCatalog,
     DiffScope,
     FlowAction,
     FlowProvider,
+    GitCatalogInput,
     GitFlowInput,
     GitInput,
     WorkLogInput,
     WorkLogProvider,
 )
-from .server import app, git, git_flow, server, git_work
+from .server import app, git, git_catalog, git_flow, git_work, server
 
 __all__ = [
     "app",
@@ -18,10 +20,13 @@ __all__ = [
     "git",
     "git_flow",
     "git_work",
+    "git_catalog",
     "GitInput",
     "GitFlowInput",
     "WorkLogInput",
+    "GitCatalogInput",
     "Cmd",
+    "CmdCatalog",
     "FlowAction",
     "FlowProvider",
     "WorkLogProvider",
