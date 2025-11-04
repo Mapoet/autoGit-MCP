@@ -240,6 +240,67 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 }
 ```
 
+### `git_catalog` 工具
+
+#### 搜索仓库
+
+```json
+{
+  "cmd": "search_repos",
+  "args": {
+    "keyword": "gnss",
+    "language": "C++",
+    "min_stars": 50,
+    "limit": 200
+  }
+}
+```
+
+#### 列出组织仓库
+
+```json
+{
+  "cmd": "org_repos",
+  "args": {
+    "org": "tensorflow",
+    "repo_type": "public",
+    "limit": 200
+  }
+}
+```
+
+#### 查询用户拥有或 Star 的项目
+
+```json
+{
+  "cmd": "user_repos",
+  "args": {
+    "login": "mapoet",
+    "mode": "both",
+    "include_archived": false,
+    "include_forks": true,
+    "sort": "stars",
+    "order": "desc",
+    "limit": 300
+  }
+}
+```
+
+#### 查询跨仓库提交明细
+
+```json
+{
+  "cmd": "cross_repos",
+  "args": {
+    "author_login": "octocat",
+    "owner": "github",
+    "since": "2025-01-01",
+    "until": "2025-11-04",
+    "max_per_repo": 1000
+  }
+}
+```
+
 ## 🏗️ 项目结构
 
 项目采用关注点分离的架构设计，接口定义与实现逻辑分离：
@@ -453,6 +514,8 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 | 用途 | 环境变量 | 是否必填 | 说明 |
 | ---- | -------- | -------- | ---- |
 | GitHub API 访问 | `GITHUB_TOKEN` | 可选但强烈建议 | GitHub Personal Access Token。未设置时使用匿名访问（速率限制 60/h），设置后可提高到 5000/h 并访问私有仓库 |
+
+> **详细说明**：完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)，包含按工具分类的配置说明和使用场景示例。
 
 ### 工具参数
 
