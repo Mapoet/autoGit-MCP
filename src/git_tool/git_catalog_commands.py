@@ -41,17 +41,55 @@ def gh_client() -> Github:
 
 
 def gitee_client() -> Dict[str, Any]:
-    """创建 Gitee API 客户端（返回配置字典）。"""
+    """创建 Gitee API 客户端（返回配置字典）。
+    
+    Gitee API v5 支持两种认证方式：
+    1. Header: Authorization: token {token}
+    2. URL 参数: ?access_token={token}
+    
+    某些 token 类型可能只支持 URL 参数方式，所以我们在每个请求中都使用 URL 参数方式。
+    """
     token = os.getenv("GITEE_TOKEN")
     base_url = "https://gitee.com/api/v5"
     headers = {}
-    if token:
-        headers["Authorization"] = f"token {token}"
+    # 注意：Gitee API v5 可能要求使用 URL 参数 access_token 而不是 Header
+    # 我们在实际请求时会将 token 添加到 URL 参数中
     return {
         "base_url": base_url,
         "headers": headers,
         "token": token,
     }
+
+
+def _check_gitee_token_error(resp: requests.Response) -> Optional[str]:
+    """检查 Gitee API 响应中的 token 相关错误，返回友好的错误消息。"""
+    if resp.status_code == 401:
+        try:
+            error_data = resp.json()
+            error_msg = error_data.get("message", "")
+            if "token" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                if "wrong type" in error_msg.lower():
+                    return "Gitee API token 类型错误。请确保使用 Personal Access Token（私人令牌），而不是 OAuth token。\n可以在 https://gitee.com/profile/personal_access_tokens 创建 Personal Access Token"
+                return "Gitee API 认证失败。请检查：\n1. GITEE_TOKEN 环境变量是否正确设置\n2. Token 是否有效（可能已过期）\n3. Token 是否有足够的权限\n4. 确保使用的是 Personal Access Token（私人令牌）\n\n可以在 https://gitee.com/profile/personal_access_tokens 创建或更新 token"
+        except Exception:
+            pass
+    return None
+
+
+def _add_gitee_auth(params: Dict[str, Any], client: Dict[str, Any]) -> Dict[str, Any]:
+    """为 Gitee API 请求添加认证参数。
+    
+    Gitee API v5 支持两种认证方式：
+    1. URL 参数: access_token={token}（推荐，兼容性更好）
+    2. Header: Authorization: token {token}
+    
+    我们优先使用 URL 参数方式，因为某些 token 类型只支持这种方式。
+    """
+    result_params = params.copy()
+    if client.get("token"):
+        # 使用 URL 参数方式（兼容性更好）
+        result_params["access_token"] = client["token"]
+    return result_params
 
 
 def parse_dt(s: Optional[str]) -> Optional[datetime]:
@@ -664,10 +702,23 @@ def _search_repos_by_keyword_gitee(
         if args.min_stars:
             params["sort"] = "stars_count"
             params["order"] = "desc"
+        
+        # 使用 URL 参数方式添加认证
+        params = _add_gitee_auth(params, client)
 
         try:
             resp = requests.get(search_url, headers=headers, params=params, timeout=30)
-            resp.raise_for_status()
+            
+            # 检查 HTTP 状态码
+            if resp.status_code == 401:
+                token_error = _check_gitee_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                else:
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            elif resp.status_code != 200:
+                resp.raise_for_status()
+            
             data = resp.json()
 
             if not data or not isinstance(data, list):
@@ -702,9 +753,20 @@ def _search_repos_by_keyword_gitee(
                 break
             page += 1
 
+        except ValueError:
+            # 认证错误等重要错误，重新抛出
+            raise
+        except requests.exceptions.HTTPError as e:
+            # HTTP 错误应该抛出
+            if e.response.status_code == 401:
+                token_error = _check_gitee_token_error(e.response)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            raise
         except Exception as e:
-            print(f"[warn] 搜索失败: {e}", file=sys.stderr)
-            break
+            # 其他错误也抛出，让顶层处理
+            raise RuntimeError(f"搜索失败: {str(e)}") from e
 
     # 本地排序
     if args.sort == "stars":
@@ -728,12 +790,27 @@ def _list_repos_for_org_gitee(client: Dict[str, Any], args: OrgReposArgs) -> Lis
         params = {
             "page": page,
             "per_page": min(100, args.limit - len(rows)),
-            "type": args.repo_type,
         }
+        # Gitee API: 如果有 token，可以使用 type 参数
+        if client.get("token"):
+            params["type"] = args.repo_type
+        
+        # 使用 URL 参数方式添加认证
+        params = _add_gitee_auth(params, client)
 
         try:
             resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
-            resp.raise_for_status()
+            
+            # 检查 HTTP 状态码
+            if resp.status_code == 401:
+                token_error = _check_gitee_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                else:
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            elif resp.status_code != 200:
+                resp.raise_for_status()
+            
             data = resp.json()
 
             if not data:
@@ -764,9 +841,20 @@ def _list_repos_for_org_gitee(client: Dict[str, Any], args: OrgReposArgs) -> Lis
                 break
             page += 1
 
+        except ValueError:
+            # 认证错误等重要错误，重新抛出
+            raise
+        except requests.exceptions.HTTPError as e:
+            # HTTP 错误应该抛出
+            if e.response.status_code == 401:
+                token_error = _check_gitee_token_error(e.response)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            raise
         except Exception as e:
-            print(f"[warn] 获取组织仓库失败: {e}", file=sys.stderr)
-            break
+            # 其他错误也抛出，让顶层处理
+            raise RuntimeError(f"获取组织仓库失败: {str(e)}") from e
 
     return rows
 
@@ -822,9 +910,20 @@ def _fetch_repo_activity_across_authors_gitee(
                 if len(commits_data) < 100:
                     break
                 commit_page += 1
+            except ValueError:
+                # 认证错误等重要错误，重新抛出
+                raise
+            except requests.exceptions.HTTPError as e:
+                # HTTP 错误应该抛出
+                if e.response.status_code == 401:
+                    token_error = _check_gitee_token_error(e.response)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                raise
             except Exception as e:
-                print(f"[warn] 获取提交失败: {e}", file=sys.stderr)
-                break
+                # 其他错误也抛出，让顶层处理
+                raise RuntimeError(f"获取提交失败: {str(e)}") from e
         return rows
 
     # 按 login 拉
@@ -837,11 +936,28 @@ def _fetch_repo_activity_across_authors_gitee(
                 params["since"] = since.isoformat()
             if until:
                 params["until"] = until.isoformat()
+            params = _add_gitee_auth(params, client)
 
             try:
                 resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
-                resp.raise_for_status()
+                if resp.status_code == 401:
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                if resp.status_code != 200:
+                    resp.raise_for_status()
                 commits_data = resp.json()
+                # 处理不同的响应格式
+                if isinstance(commits_data, dict):
+                    if "message" in commits_data:
+                        print(f"[warn] Gitee API 返回错误: {commits_data.get('message')}", file=sys.stderr)
+                        break
+                    if "data" in commits_data:
+                        commits_data = commits_data["data"]
+                    elif "items" in commits_data:
+                        commits_data = commits_data["items"]
+                    else:
+                        commits_data = []
 
                 if not commits_data:
                     break
@@ -870,9 +986,20 @@ def _fetch_repo_activity_across_authors_gitee(
                 if len(commits_data) < 100 or cnt >= args.max_per_author:
                     break
                 commit_page += 1
+            except ValueError:
+                # 认证错误等重要错误，重新抛出
+                raise
+            except requests.exceptions.HTTPError as e:
+                # HTTP 错误应该抛出
+                if e.response.status_code == 401:
+                    token_error = _check_gitee_token_error(e.response)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                raise
             except Exception as e:
-                print(f"[warn] login {login}: {e}", file=sys.stderr)
-                break
+                # 其他错误也抛出，让顶层处理
+                raise RuntimeError(f"获取 login {login} 的提交失败: {str(e)}") from e
 
     # 仅邮箱（补漏）
     if authors_emails:
@@ -916,9 +1043,20 @@ def _fetch_repo_activity_across_authors_gitee(
                 if len(commits_data) < 100 or cnt >= args.max_per_author:
                     break
                 commit_page += 1
+            except ValueError:
+                # 认证错误等重要错误，重新抛出
+                raise
+            except requests.exceptions.HTTPError as e:
+                # HTTP 错误应该抛出
+                if e.response.status_code == 401:
+                    token_error = _check_gitee_token_error(e.response)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                raise
             except Exception as e:
-                print(f"[warn] email pass: {e}", file=sys.stderr)
-                break
+                # 其他错误也抛出，让顶层处理
+                raise RuntimeError(f"获取邮箱相关提交失败: {str(e)}") from e
 
     return rows
 
@@ -955,9 +1093,20 @@ def _list_repos_for_author_gitee(
             if len(data) < 100:
                 break
             page += 1
+        except ValueError:
+            # 认证错误等重要错误，重新抛出
+            raise
+        except requests.exceptions.HTTPError as e:
+            # HTTP 错误应该抛出
+            if e.response.status_code == 401:
+                token_error = _check_gitee_token_error(e.response)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            raise
         except Exception as e:
-            print(f"[warn] 获取仓库列表失败: {e}", file=sys.stderr)
-            break
+            # 其他错误也抛出，让顶层处理
+            raise RuntimeError(f"获取仓库列表失败: {str(e)}") from e
 
     # 遍历仓库统计提交
     for repo_data in repos:
@@ -1035,11 +1184,28 @@ def _list_authors_for_repo_gitee(
             params["since"] = since.isoformat()
         if until:
             params["until"] = until.isoformat()
+        params = _add_gitee_auth(params, client)
 
         try:
             resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
-            resp.raise_for_status()
+            if resp.status_code == 401:
+                token_error = _check_gitee_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+            if resp.status_code != 200:
+                resp.raise_for_status()
             commits_data = resp.json()
+            # 处理不同的响应格式
+            if isinstance(commits_data, dict):
+                if "message" in commits_data:
+                    print(f"[warn] Gitee API 返回错误: {commits_data.get('message')}", file=sys.stderr)
+                    break
+                if "data" in commits_data:
+                    commits_data = commits_data["data"]
+                elif "items" in commits_data:
+                    commits_data = commits_data["items"]
+                else:
+                    commits_data = []
 
             if not commits_data:
                 break
@@ -1062,9 +1228,20 @@ def _list_authors_for_repo_gitee(
             if len(commits_data) < 100:
                 break
             commit_page += 1
+        except ValueError:
+            # 认证错误等重要错误，重新抛出
+            raise
+        except requests.exceptions.HTTPError as e:
+            # HTTP 错误应该抛出
+            if e.response.status_code == 401:
+                token_error = _check_gitee_token_error(e.response)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            raise
         except Exception as e:
-            print(f"[warn] 获取提交失败: {e}", file=sys.stderr)
-            break
+            # 其他错误也抛出，让顶层处理
+            raise RuntimeError(f"获取提交失败: {str(e)}") from e
 
     for key, cnt in counter.most_common():
         if cnt >= args.min_commits:
@@ -1088,27 +1265,37 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
 
     def add_repo(repo_data: Dict[str, Any], relation: str) -> bool:
         """添加仓库到结果列表（应用过滤条件）。"""
-        if (not args.include_archived) and repo_data.get("archived", False):
+        # Gitee API 可能返回 None，需要处理
+        archived = repo_data.get("archived") or False
+        is_fork = repo_data.get("fork") or False
+        is_private = repo_data.get("private") or False
+        
+        if (not args.include_archived) and archived:
             return False
-        if (not args.include_forks) and repo_data.get("fork", False):
+        if (not args.include_forks) and is_fork:
             return False
-        if (not args.include_private) and repo_data.get("private", False):
+        if (not args.include_private) and is_private:
             return False
+
+        # 处理 html_url，移除 .git 后缀（如果有）
+        html_url = repo_data.get("html_url", "")
+        if html_url.endswith(".git"):
+            html_url = html_url[:-4]
 
         rows.append({
             "relation": relation,
             "full_name": repo_data.get("full_name", ""),
             "name": repo_data.get("name", ""),
             "owner": repo_data.get("owner", {}).get("login", "") if repo_data.get("owner") else "",
-            "description": repo_data.get("description", ""),
-            "language": repo_data.get("language", ""),
-            "stargazers_count": repo_data.get("stargazers_count", 0),
-            "forks_count": repo_data.get("forks_count", 0),
-            "archived": repo_data.get("archived", False),
-            "private": repo_data.get("private", False),
-            "updated_at": repo_data.get("updated_at", ""),
-            "pushed_at": repo_data.get("pushed_at", ""),
-            "html_url": repo_data.get("html_url", ""),
+            "description": repo_data.get("description", "") or "",
+            "language": repo_data.get("language", "") or "",
+            "stargazers_count": repo_data.get("stargazers_count", 0) or 0,
+            "forks_count": repo_data.get("forks_count", 0) or 0,
+            "archived": archived,
+            "private": is_private,
+            "updated_at": repo_data.get("updated_at", "") or "",
+            "pushed_at": repo_data.get("pushed_at", "") or "",
+            "html_url": html_url,
         })
         return True
 
@@ -1120,11 +1307,29 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
             max_collect = args.limit + 50 if args.mode == "both" else args.limit
 
             while len(rows) < max_collect:
-                params = {"page": page, "per_page": 100, "type": "owner"}
+                # Gitee API: 不带 type 参数时返回公开仓库，需要认证
+                # 如果有 token，可以使用 type=owner/all 获取更多仓库
+                params = {"page": page, "per_page": 100}
+                if client.get("token"):
+                    # 有 token 时，根据 include_private 决定 type
+                    if args.include_private:
+                        params["type"] = "all"
+                    else:
+                        params["type"] = "owner"
+                # 使用 URL 参数方式添加认证（兼容性更好）
+                params = _add_gitee_auth(params, client)
+                
                 resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
                 
                 # 检查 HTTP 状态码
-                if resp.status_code == 404:
+                if resp.status_code == 401:
+                    # 需要认证或 token 无效
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    else:
+                        raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                elif resp.status_code == 404:
                     # 用户不存在
                     print(f"[warn] 用户 '{args.login}' 不存在或无法访问", file=sys.stderr)
                     break
@@ -1158,12 +1363,25 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
                 if len(data) < 100 or len(rows) >= max_collect:
                     break
                 page += 1
+        except ValueError:
+            # 认证错误等重要错误，重新抛出
+            raise
         except requests.exceptions.HTTPError as e:
-            print(f"[warn] 获取 owned repos 失败 (HTTP {e.response.status_code}): {e}", file=sys.stderr)
+            # HTTP 错误：404 可以继续（用户不存在），其他错误应该抛出
             if e.response.status_code == 404:
-                print(f"[warn] 用户 '{args.login}' 可能不存在", file=sys.stderr)
+                print(f"[warn] 用户 '{args.login}' 可能不存在或无法访问", file=sys.stderr)
+            elif e.response.status_code == 401:
+                # 401 应该已经被上面的代码处理并抛出 ValueError，但以防万一
+                token_error = _check_gitee_token_error(e.response) if hasattr(e, 'response') else None
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            else:
+                # 其他 HTTP 错误应该抛出
+                raise
         except Exception as e:
-            print(f"[warn] 获取 owned repos 失败: {e}", file=sys.stderr)
+            # 其他未知错误也抛出，让顶层处理
+            raise RuntimeError(f"获取 owned repos 失败: {str(e)}") from e
 
     # starred
     if args.mode in ("starred", "both"):
@@ -1174,10 +1392,19 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
 
             while len(rows) < max_collect:
                 params = {"page": page, "per_page": 100}
+                # 使用 URL 参数方式添加认证
+                params = _add_gitee_auth(params, client)
                 resp = requests.get(starred_url, headers=headers, params=params, timeout=30)
                 
                 # 检查 HTTP 状态码
-                if resp.status_code == 404:
+                if resp.status_code == 401:
+                    # 需要认证或 token 无效
+                    token_error = _check_gitee_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    else:
+                        raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                elif resp.status_code == 404:
                     print(f"[warn] 用户 '{args.login}' 的 starred repos 无法访问", file=sys.stderr)
                     break
                 elif resp.status_code != 200:
@@ -1208,10 +1435,25 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
                 if len(data) < 100 or len(rows) >= max_collect:
                     break
                 page += 1
+        except ValueError:
+            # 认证错误等重要错误，重新抛出
+            raise
         except requests.exceptions.HTTPError as e:
-            print(f"[warn] 获取 starred repos 失败 (HTTP {e.response.status_code}): {e}", file=sys.stderr)
+            # HTTP 错误：404 可以继续（资源不存在），其他错误应该抛出
+            if e.response.status_code == 404:
+                print(f"[warn] 用户 '{args.login}' 的 starred repos 无法访问", file=sys.stderr)
+            elif e.response.status_code == 401:
+                # 401 应该已经被上面的代码处理并抛出 ValueError，但以防万一
+                token_error = _check_gitee_token_error(e.response) if hasattr(e, 'response') else None
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+            else:
+                # 其他 HTTP 错误应该抛出
+                raise
         except Exception as e:
-            print(f"[warn] 获取 starred repos 失败: {e}", file=sys.stderr)
+            # 其他未知错误也抛出，让顶层处理
+            raise RuntimeError(f"获取 starred repos 失败: {str(e)}") from e
 
     # 去重
     seen: Dict[str, int] = {}
@@ -1308,12 +1550,31 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
         }, ensure_ascii=False)
 
     except ValueError as e:
-        # 参数验证错误
+        # 参数验证错误或认证错误（ValueError 也用于认证错误）
+        error_msg = str(e)
+        # 检查是否是认证相关错误
+        if "认证" in error_msg or "token" in error_msg.lower() or "unauthorized" in error_msg.lower() or "GITEE_TOKEN" in error_msg or "GITHUB_TOKEN" in error_msg:
+            return json.dumps({
+                "exit_code": 1,
+                "count": 0,
+                "rows": [],
+                "stderr": error_msg,  # 直接返回认证错误信息
+            }, ensure_ascii=False)
+        else:
+            return json.dumps({
+                "exit_code": 1,
+                "count": 0,
+                "rows": [],
+                "stderr": f"参数验证错误: {error_msg}",
+            }, ensure_ascii=False)
+    
+    except RuntimeError as e:
+        # RuntimeError 通常是业务逻辑错误
         return json.dumps({
             "exit_code": 1,
             "count": 0,
             "rows": [],
-            "stderr": f"参数验证错误: {str(e)}",
+            "stderr": str(e),
         }, ensure_ascii=False)
 
     except GithubException as e:
@@ -1330,6 +1591,13 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
         error_msg = f"Gitee API HTTP 错误: {e.response.status_code}"
         if e.response.status_code == 404:
             error_msg += " (用户不存在或资源未找到)"
+        elif e.response.status_code == 401:
+            # 401 错误应该提供更详细的认证信息
+            token_error = _check_gitee_token_error(e.response)
+            if token_error:
+                error_msg = token_error
+            else:
+                error_msg += " (需要认证，请设置 GITEE_TOKEN 环境变量)"
         try:
             error_detail = e.response.json()
             if "message" in error_detail:
