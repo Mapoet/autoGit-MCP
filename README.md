@@ -511,6 +511,8 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 | AI 总结（OpenAI） | `OPENAI_API_KEY` | 条件必填 | OpenAI API Key（使用 OpenAI 时必填） |
 | GitHub 仓库访问 | `GITHUB_TOKEN` | 条件必填 | GitHub Personal Access Token（访问私有仓库时必填） |
 | Gitee 仓库访问 | `GITEE_TOKEN` | 条件必填 | Gitee Personal Access Token（访问私有仓库时必填） |
+| GitLab 仓库访问 | `GITLAB_TOKEN` 或 `GITLAB_PRIVATE_TOKEN` | 条件必填 | GitLab Personal Access Token（访问私有仓库时必填） |
+| GitLab 实例 URL | `GITLAB_URL` | 可选 | 自定义 GitLab 实例 URL（默认: https://gitlab.com/api/v4）。使用自托管 GitLab 实例时设置 |
 
 > **详细说明**：完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)，包含按工具分类的配置说明和使用场景示例。
 
@@ -711,8 +713,9 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 ### 最新改进（v1.4）
 
 - ✅ **`git_catalog` 工具支持 Gitee 和 GitLab**：新增 Gitee 和 GitLab 平台支持，所有 7 个子命令均可使用 Gitee 或 GitLab API
-- ✅ **统一接口设计**：通过 `provider` 参数（github/gitee）选择平台，保持接口一致性
-- ✅ **完整的 Gitee API 实现**：实现了所有 7 个子命令的 Gitee 版本，包括搜索、组织、用户仓库等功能
+- ✅ **`git_work` 工具支持 GitLab**：新增 GitLab 平台支持，可以从 GitLab 仓库收集提交记录并生成工作日志
+- ✅ **统一接口设计**：通过 `provider` 参数（github/gitee/gitlab）选择平台，保持接口一致性
+- ✅ **完整的 Gitee/GitLab API 实现**：实现了所有 7 个子命令的 Gitee 和 GitLab 版本，包括搜索、组织、用户仓库等功能
 
 ### 历史版本（v1.3）
 
