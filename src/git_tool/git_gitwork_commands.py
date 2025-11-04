@@ -354,6 +354,102 @@ def _get_gitee_events(
     return events
 
 
+def _get_gitlab_events(
+    repo_full_name: str, token: str, since_dt: datetime, until_dt: datetime
+) -> List[Dict[str, Any]]:
+    """Get commits from GitLab within time range."""
+    events: List[Dict[str, Any]] = []
+    since_utc = since_dt.replace(tzinfo=timezone.utc) if since_dt.tzinfo is None else since_dt.astimezone(timezone.utc)
+    until_utc = until_dt.replace(tzinfo=timezone.utc) if until_dt.tzinfo is None else until_dt.astimezone(timezone.utc)
+
+    # GitLab 项目路径需要 URL 编码
+    import urllib.parse
+    repo_id = urllib.parse.quote(repo_full_name, safe="")
+    
+    base_url = os.getenv("GITLAB_URL", "https://gitlab.com/api/v4")
+    headers = {}
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+
+    # Get commits
+    try:
+        commits_url = f"{base_url}/projects/{repo_id}/repository/commits"
+        page = 1
+        while True:
+            params = {
+                "since": since_utc.isoformat(),
+                "until": until_utc.isoformat(),
+                "per_page": 100,
+                "page": page,
+            }
+            resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+            
+            if resp.status_code == 401:
+                error_msg = "GitLab API 认证失败。请检查：\n"
+                error_msg += "1. GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN 环境变量是否正确设置\n"
+                error_msg += "2. Token 是否有效（可能已过期）\n"
+                error_msg += "3. Token 是否有足够的权限（至少需要 read_api 权限）\n"
+                error_msg += "4. 如果使用自定义 GitLab 实例，请确保 GITLAB_URL 环境变量正确设置\n"
+                error_msg += "\n可以在 GitLab 设置中创建 Personal Access Token：https://gitlab.com/-/profile/personal_access_tokens"
+                raise Exception(error_msg)
+            elif resp.status_code == 404:
+                raise Exception(f"无法找到仓库 {repo_full_name}。可能原因：\n1. 仓库不存在\n2. 仓库是私有的，且 token 没有访问权限\n3. 仓库路径格式错误（应为 NAMESPACE/PROJECT）")
+            elif resp.status_code != 200:
+                resp.raise_for_status()
+            
+            commits_data = resp.json()
+
+            if not commits_data or not isinstance(commits_data, list):
+                break
+
+            for c in commits_data:
+                commit_date_str = c.get("created_at", "")
+                if commit_date_str:
+                    try:
+                        commit_date = datetime.fromisoformat(commit_date_str.replace("Z", "+00:00"))
+                        if commit_date.tzinfo is None:
+                            commit_date = commit_date.replace(tzinfo=timezone.utc)
+
+                        if since_utc <= commit_date <= until_utc:
+                            message = (c.get("message", "") or "").splitlines()[0]
+                            author_name = c.get("author_name", "Unknown")
+                            author_email = c.get("author_email", "")
+
+                            events.append({
+                                "sha": c.get("id", "")[:40],
+                                "author_name": author_name,
+                                "author_email": author_email,
+                                "date": commit_date.isoformat(),
+                                "date_epoch": int(commit_date.timestamp()),
+                                "message": message,
+                                "type": "commit",
+                            })
+                    except Exception:
+                        continue
+
+            if len(commits_data) < 100:
+                break
+            page += 1
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            error_msg = "GitLab API 认证失败。请检查：\n"
+            error_msg += "1. GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN 环境变量是否正确设置\n"
+            error_msg += "2. Token 是否有效（可能已过期）\n"
+            error_msg += "3. Token 是否有足够的权限（至少需要 read_api 权限）\n"
+            error_msg += "4. 如果使用自定义 GitLab 实例，请确保 GITLAB_URL 环境变量正确设置\n"
+            error_msg += "\n可以在 GitLab 设置中创建 Personal Access Token：https://gitlab.com/-/profile/personal_access_tokens"
+            raise Exception(error_msg) from e
+        raise
+    except Exception as e:
+        # 如果错误消息已经包含了详细信息，直接抛出
+        if "GitLab API 认证失败" in str(e) or "无法找到仓库" in str(e):
+            raise
+        raise Exception(f"获取 GitLab 仓库 {repo_full_name} 失败: {str(e)}") from e
+
+    events.sort(key=lambda e: e["date_epoch"])
+    return events
+
+
 def _group_commits_by_date(commits: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """Group commits by date."""
     groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -870,11 +966,12 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
             })
 
         # Determine if multi-project mode
-        total_repos = len(payload.repo_paths) + len(payload.github_repos) + len(payload.gitee_repos)
+        total_repos = len(payload.repo_paths) + len(payload.github_repos) + len(payload.gitee_repos) + len(payload.gitlab_repos)
         multi_project = (
             len(payload.repo_paths) > 1
             or len(payload.github_repos) > 1
             or len(payload.gitee_repos) > 1
+            or len(payload.gitlab_repos) > 1
             or total_repos > 1
         )
 
@@ -937,6 +1034,25 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                         "exit_code": 1,
                         "stdout": "",
                         "stderr": f"获取 Gitee 仓库 {repo_name} 失败: {str(e)}",
+                    })
+
+            # GitLab repos
+            gitlab_token = os.getenv("GITLAB_TOKEN") or os.getenv("GITLAB_PRIVATE_TOKEN")
+            if payload.gitlab_repos and gitlab_token:
+                repo_name = payload.gitlab_repos[0]
+                try:
+                    remote_commits = _get_gitlab_events(repo_name, gitlab_token, start, end)
+                    if payload.author:
+                        author_lower = payload.author.lower()
+                        remote_commits = [c for c in remote_commits if author_lower in c["author_name"].lower() or author_lower in c.get("author_email", "").lower()]
+                    commits.extend(remote_commits)
+                    for c in remote_commits:
+                        details[c["sha"]] = ([], 0, 0, c["message"])
+                except Exception as e:
+                    return json.dumps({
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": f"获取 GitLab 仓库 {repo_name} 失败: {str(e)}",
                     })
 
             commits.sort(key=lambda c: _commit_time_dt(c))
@@ -1037,6 +1153,28 @@ def execute_work_log_command(payload: WorkLogInput) -> str:
                             "exit_code": 1,
                             "stdout": "",
                             "stderr": f"获取 Gitee 仓库 {repo_name} 失败: {str(e)}",
+                        })
+
+            # Process GitLab repos
+            gitlab_token = os.getenv("GITLAB_TOKEN") or os.getenv("GITLAB_PRIVATE_TOKEN")
+            if payload.gitlab_repos and gitlab_token:
+                for repo_name in payload.gitlab_repos:
+                    try:
+                        commits = _get_gitlab_events(repo_name, gitlab_token, start, end)
+                        if payload.author:
+                            author_lower = payload.author.lower()
+                            commits = [c for c in commits if author_lower in c["author_name"].lower() or author_lower in c.get("author_email", "").lower()]
+                        repo_to_commits[repo_name] = commits
+                        details_map: Dict[str, Tuple[List[str], int, int, str]] = {}
+                        for c in commits:
+                            details_map[c["sha"]] = ([], 0, 0, c["message"])
+                        repo_to_details[repo_name] = details_map
+                        repo_to_grouped[repo_name] = _group_commits_by_date(commits)
+                    except Exception as e:
+                        return json.dumps({
+                            "exit_code": 1,
+                            "stdout": "",
+                            "stderr": f"获取 GitLab 仓库 {repo_name} 失败: {str(e)}",
                         })
 
             # Generate summary if needed

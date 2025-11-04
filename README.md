@@ -6,8 +6,8 @@
 
 - **`git` 工具**：将常见 Git 子命令统一为 `cmd + args` 调用，提供参数校验、危险命令防护以及结构化输出，覆盖 `status`、`add`、`commit`、`pull`、`push`、`fetch`、`merge`、`rebase`、`diff`、`log`、`branch`、`switch`、`tag`、`reset`、`revert`、`clean`、`remote`、`stash`、`submodule`、`cherry-pick` 等命令。
 - **`git_flow` 工具**：结合仓库 README、Git Diff 与自定义提示词，通过 OpenGPT 或 DeepSeek 等兼容 OpenAI Chat Completions 接口的模型自动生成提交信息等内容，亦可基于预设的 Git 组合命令模板生成执行方案，并支持占位符填充与冲突处理提示。
-- **`git_work` 工具**：从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
-- **`git_catalog` 工具**：GitHub/Gitee 活动/仓库目录查询工具，支持 7 个子命令查询 GitHub 或 Gitee 仓库和提交活动。包括跨仓库提交明细、仓库作者统计、关键词搜索、组织仓库列表、用户拥有/Star 项目列表等功能。
+- **`git_work` 工具**：从本地仓库、GitHub、Gitee 或 GitLab 收集 Git 提交记录，生成结构化工作日志。支持多项目分析、工作会话计算、并行工作时间检测，并可选择性地使用 AI 生成工作总结。
+- **`git_catalog` 工具**：GitHub/Gitee/GitLab 活动/仓库目录查询工具，支持 7 个子命令查询 GitHub、Gitee 或 GitLab 仓库和提交活动。包括跨仓库提交明细、仓库作者统计、关键词搜索、组织/组仓库列表、用户拥有/Star 项目列表等功能。
 - **FastMCP Server**：基于 `mcp.server.fastmcp.FastMCP` 暴露工具，使用 HTTP/SSE 协议，便于与任意兼容 MCP 的客户端集成。
 - **完善的错误处理**：所有工具都包含全面的异常捕获和友好的错误消息返回。
 - **代码结构优化**：采用关注点分离设计，接口定义与实现逻辑分离，便于维护和扩展。
@@ -27,7 +27,7 @@ pip install -r requirements.txt
 - `pydantic` (v2) - 数据验证
 - `uvicorn` - ASGI 服务器
 - `GitPython` - Git 仓库操作（`git_work` 工具必需）
-- `requests` - HTTP 请求（`git_work` 工具访问 GitHub/Gitee API）
+- `requests` - HTTP 请求（`git_work` 工具访问 GitHub/Gitee/GitLab API）
 
 **可选依赖（根据使用场景安装）**：
 - `openai` - OpenAI API 客户端（`git_work` 工具使用 OpenAI 时）
@@ -78,7 +78,7 @@ export OPENAI_API_KEY="your-openai-api-key"                  # 必填
 
 **2. 远程仓库访问（可选）**：
 
-如果需要在 `git_work` 中访问 GitHub 或 Gitee 仓库：
+如果需要在 `git_work` 中访问 GitHub、Gitee 或 GitLab 仓库：
 
 ```bash
 # GitHub 仓库访问（访问私有仓库或提高 API 限制）
@@ -86,11 +86,19 @@ export GITHUB_TOKEN="your-github-personal-access-token"     # 必填（访问私
 
 # Gitee 仓库访问（访问私有仓库）
 export GITEE_TOKEN="your-gitee-personal-access-token"       # 必填（访问私有仓库时）
+
+# GitLab 仓库访问（访问私有仓库）
+export GITLAB_TOKEN="your-gitlab-personal-access-token"     # 必填（访问私有仓库时）
+# 或使用
+export GITLAB_PRIVATE_TOKEN="your-gitlab-personal-access-token"  # 同上
+
+# 自定义 GitLab 实例 URL（可选，默认使用 https://gitlab.com/api/v4）
+export GITLAB_URL="https://your-gitlab-instance.com/api/v4"  # 使用自定义 GitLab 实例时
 ```
 
 #### `git_catalog` 工具所需环境变量
 
-`git_catalog` 工具用于查询 GitHub 或 Gitee 仓库和提交活动，需要配置相应的 API 访问：
+`git_catalog` 工具用于查询 GitHub、Gitee 或 GitLab 仓库和提交活动，需要配置相应的 API 访问：
 
 ```bash
 # GitHub API 访问（提高速率限制并访问私有仓库）
@@ -98,15 +106,24 @@ export GITHUB_TOKEN="your-github-personal-access-token"     # 可选，但强烈
 
 # Gitee API 访问（访问私有仓库时必填）
 export GITEE_TOKEN="your-gitee-personal-access-token"       # 访问私有仓库时必填（使用 provider='gitee' 时）
+
+# GitLab API 访问（访问私有仓库时必填）
+export GITLAB_TOKEN="your-gitlab-personal-access-token"     # 访问私有仓库时必填（使用 provider='gitlab' 时）
+# 或使用
+export GITLAB_PRIVATE_TOKEN="your-gitlab-personal-access-token"  # 同上
+
+# 自定义 GitLab 实例 URL（可选，默认使用 https://gitlab.com/api/v4）
+export GITLAB_URL="https://your-gitlab-instance.com/api/v4"  # 使用自定义 GitLab 实例时
 ```
 
 > **注意**：
 > - GitHub：未设置 `GITHUB_TOKEN` 时，工具会使用匿名访问（速率限制 60/h）。设置 token 可提高到 5000/h 并访问私有仓库。
 > - Gitee：访问公开仓库可以不设置 token，但访问私有仓库时必填 `GITEE_TOKEN`。
+> - GitLab：访问公开仓库可以不设置 token，但访问私有仓库时必填 `GITLAB_TOKEN` 或 `GITLAB_PRIVATE_TOKEN`。如需使用自定义 GitLab 实例，请设置 `GITLAB_URL` 环境变量。
 
 > **注意**：
 > - `git` 工具不需要任何环境变量
-> - 访问公开的 GitHub/Gitee 仓库可以不设置 token，但设置了 token 可以避免 API 速率限制
+> - 访问公开的 GitHub/Gitee/GitLab 仓库可以不设置 token，但设置了 token 可以避免 API 速率限制
 > - `git_catalog` 工具未设置 token 时使用匿名访问（速率限制较低），建议设置 token 以提高性能
 > - 所有环境变量都是可选的，只有在使用对应功能时才需要配置
 > - 完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)
@@ -229,13 +246,14 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 }
 ```
 
-#### 生成多项目工作日志（包含 GitHub/Gitee）
+#### 生成多项目工作日志（包含 GitHub/Gitee/GitLab）
 
 ```json
 {
   "repo_paths": ["/path/to/local/repo1", "/path/to/local/repo2"],
   "github_repos": ["owner/repo1", "owner/repo2"],
   "gitee_repos": ["owner/repo1"],
+  "gitlab_repos": ["namespace/project1"],
   "since": "2024-11-01",
   "until": "2024-11-07",
   "session_gap_minutes": 60,
@@ -271,6 +289,19 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
   "args": {
     "keyword": "gnss",
     "language": "C++",
+    "limit": 200
+  }
+}
+```
+
+#### 搜索仓库（GitLab）
+
+```json
+{
+  "provider": "gitlab",
+  "cmd": "search_repos",
+  "args": {
+    "keyword": "gnss",
     "limit": 200
   }
 }
@@ -463,9 +494,9 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ## 📊 `git_work` 工作日志生成
 
-`git_work` 工具可以从本地仓库、GitHub 或 Gitee 收集 Git 提交记录，生成结构化的 Markdown 工作日志。它支持：
+`git_work` 工具可以从本地仓库、GitHub、Gitee 或 GitLab 收集 Git 提交记录，生成结构化的 Markdown 工作日志。它支持：
 
-- **多数据源**：支持本地仓库路径、GitHub 仓库（`OWNER/REPO`）、Gitee 仓库
+- **多数据源**：支持本地仓库路径、GitHub 仓库（`OWNER/REPO`）、Gitee 仓库、GitLab 仓库（`NAMESPACE/PROJECT`）
 - **时间范围**：支持指定时间范围（`since`/`until`）或最近 N 天（`days`）
 - **作者过滤**：可以按作者姓名或邮箱过滤提交
 - **工作会话分析**：自动计算工作会话，识别提交的连续性和时间间隔
@@ -492,6 +523,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
   "repo_paths": ["/path/to/repo"],      // 本地仓库路径列表
   "github_repos": ["owner/repo"],       // GitHub 仓库列表（格式：OWNER/REPO）
   "gitee_repos": ["owner/repo"],        // Gitee 仓库列表（格式：OWNER/REPO）
+  "gitlab_repos": ["namespace/project"], // GitLab 仓库列表（格式：NAMESPACE/PROJECT）
   "since": "2024-11-01",                // 起始时间（ISO 格式或 YYYY-MM-DD）
   "until": "2024-11-07",                // 结束时间（ISO 格式或 YYYY-MM-DD）
   "days": 7,                            // 最近 N 天（覆盖 since/until）
@@ -518,9 +550,9 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 `stdout` 包含完整的 Markdown 格式工作日志，如果启用了 `add_summary`，会在日志末尾包含 AI 生成的中文总结。
 
-## 🔍 `git_catalog` GitHub/Gitee 仓库目录查询
+## 🔍 `git_catalog` GitHub/Gitee/GitLab 仓库目录查询
 
-`git_catalog` 工具提供了统一的 GitHub/Gitee 活动/仓库目录查询接口，支持 7 个子命令查询 GitHub 或 Gitee 仓库和提交活动。
+`git_catalog` 工具提供了统一的 GitHub/Gitee/GitLab 活动/仓库目录查询接口，支持 7 个子命令查询 GitHub、Gitee 或 GitLab 仓库和提交活动。
 
 ### 功能特性
 
@@ -538,6 +570,8 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 | ---- | -------- | -------- | ---- |
 | GitHub API 访问 | `GITHUB_TOKEN` | 可选但强烈建议 | GitHub Personal Access Token。未设置时使用匿名访问（速率限制 60/h），设置后可提高到 5000/h 并访问私有仓库 |
 | Gitee API 访问 | `GITEE_TOKEN` | 条件必填 | Gitee Personal Access Token。访问公开仓库时可选，访问私有仓库时必填 |
+| GitLab API 访问 | `GITLAB_TOKEN` 或 `GITLAB_PRIVATE_TOKEN` | 条件必填 | GitLab Personal Access Token。访问公开仓库时可选，访问私有仓库时必填 |
+| GitLab 实例 URL | `GITLAB_URL` | 可选 | 自定义 GitLab 实例 URL（默认: https://gitlab.com/api/v4）。使用自托管 GitLab 实例时设置 |
 
 > **详细说明**：完整的环境变量配置指南请参考 [`docs/environment-variables.md`](docs/environment-variables.md)，包含按工具分类的配置说明和使用场景示例。
 
@@ -547,7 +581,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ```jsonc
 {
-  "provider": "github" | "gitee",  // 代码托管平台提供商，默认 "github"
+  "provider": "github" | "gitee" | "gitlab",  // 代码托管平台提供商，默认 "github"
   "cmd": "search_repos" | "org_repos" | "cross_repos" | "repo_authors" | "repos_by_author" | "authors_by_repo" | "user_repos",
   "args": {
     // 参数取决于 cmd 值，详见下方说明
@@ -676,7 +710,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ### 最新改进（v1.4）
 
-- ✅ **`git_catalog` 工具支持 Gitee**：新增 Gitee 平台支持，所有 7 个子命令均可使用 Gitee API
+- ✅ **`git_catalog` 工具支持 Gitee 和 GitLab**：新增 Gitee 和 GitLab 平台支持，所有 7 个子命令均可使用 Gitee 或 GitLab API
 - ✅ **统一接口设计**：通过 `provider` 参数（github/gitee）选择平台，保持接口一致性
 - ✅ **完整的 Gitee API 实现**：实现了所有 7 个子命令的 Gitee 版本，包括搜索、组织、用户仓库等功能
 
@@ -692,7 +726,7 @@ uvicorn src.git_tool.server:app --reload --port 9010 --lifespan on
 
 ### 历史版本（v1.2）
 
-- ✅ **新增 `git_work` 工具**：支持从本地/GitHub/Gitee 收集提交并生成工作日志
+- ✅ **新增 `git_work` 工具**：支持从本地/GitHub/Gitee/GitLab 收集提交并生成工作日志
 - ✅ **工作会话分析**：自动计算工作会话，检测并行工作时间
 - ✅ **AI 总结生成**：集成 DeepSeek 和 OpenAI，生成中文工作总结
 - ✅ **多项目支持**：支持同时分析多个本地或远程仓库

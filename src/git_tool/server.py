@@ -361,7 +361,7 @@ def git_work(
         Optional[list[str]],
         Field(
             default=None,
-            description="Local repository paths. Can be a single path or list of paths. At least one repository source (repo_paths, github_repos, or gitee_repos) must be provided."
+            description="Local repository paths. Can be a single path or list of paths. At least one repository source (repo_paths, github_repos, gitee_repos, or gitlab_repos) must be provided."
         ),
     ],
     github_repos: Annotated[
@@ -376,6 +376,13 @@ def git_work(
         Field(
             default=None,
             description="Gitee repositories in format OWNER/REPO. Can be a single repo or list of repos. Requires GITEE_TOKEN environment variable for private repos."
+        ),
+    ],
+    gitlab_repos: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description="GitLab repositories in format NAMESPACE/PROJECT. Can be a single repo or list of repos. Requires GITLAB_TOKEN or GITLAB_PRIVATE_TOKEN environment variable for private repos. Supports custom GitLab instances via GITLAB_URL environment variable."
         ),
     ],
     since: Annotated[
@@ -458,15 +465,18 @@ def git_work(
 ) -> str:
     """Generate work log from git commits.
     
-    This tool analyzes git commits from local repositories, GitHub, or Gitee to generate
+    This tool analyzes git commits from local repositories, GitHub, Gitee, or GitLab to generate
     a structured work log. It can:
     - Collect commits from multiple repository sources
     - Group commits by date
     - Compute work sessions based on commit timestamps
     - Generate AI-powered summaries (optional)
     
-    Supports both single-project and multi-project analysis. For remote repositories
-    (GitHub/Gitee), set GITHUB_TOKEN or GITEE_TOKEN environment variables.
+    Supports both single-project and multi-project analysis. For remote repositories:
+    - GitHub: Set GITHUB_TOKEN environment variable for private repos
+    - Gitee: Set GITEE_TOKEN environment variable for private repos
+    - GitLab: Set GITLAB_TOKEN or GITLAB_PRIVATE_TOKEN environment variable for private repos
+      (supports custom GitLab instances via GITLAB_URL environment variable)
     
     Returns a JSON string with exit_code, stdout (markdown work log), and stderr (error messages).
     """
@@ -475,6 +485,7 @@ def git_work(
         repo_paths_list = repo_paths or []
         github_repos_list = github_repos or []
         gitee_repos_list = gitee_repos or []
+        gitlab_repos_list = gitlab_repos or []
         
         # Validate provider
         try:
@@ -490,6 +501,7 @@ def git_work(
             repo_paths=repo_paths_list,
             github_repos=github_repos_list,
             gitee_repos=gitee_repos_list,
+            gitlab_repos=gitlab_repos_list,
             since=since,
             until=until,
             days=days,
@@ -525,8 +537,8 @@ def git_catalog(
         str,
         Field(
             default="github",
-            description="代码托管平台提供商。支持 'github' 或 'gitee'。默认 'github'。",
-            examples=["github", "gitee"],
+            description="代码托管平台提供商。支持 'github'、'gitee' 或 'gitlab'。默认 'github'。",
+            examples=["github", "gitee", "gitlab"],
         ),
     ],
     cmd: Annotated[
@@ -603,9 +615,9 @@ def git_catalog(
         ),
     ],
 ) -> str:
-    """GitHub/Gitee 活动/仓库目录查询工具。
+    """GitHub/Gitee/GitLab 活动/仓库目录查询工具。
     
-    统一入口：支持 7 个子命令查询 GitHub 或 Gitee 仓库和提交活动。
+    统一入口：支持 7 个子命令查询 GitHub、Gitee 或 GitLab 仓库和提交活动。
     
     子命令说明：
     - cross_repos: 不同仓库同一作者（提交明细） - 查询指定作者在多个仓库中的提交记录
@@ -613,12 +625,14 @@ def git_catalog(
     - repos_by_author: 同一作者在哪些仓库活跃（列表） - 列出指定作者活跃的仓库及其提交数
     - authors_by_repo: 同一仓库活跃作者（列表） - 列出指定仓库中的活跃作者及其提交数
     - search_repos: 关键词搜索仓库 - 根据关键词、语言、Star 数等条件搜索仓库
-    - org_repos: 组织仓库列表 - 列出指定组织的所有仓库
+    - org_repos: 组织仓库列表 - 列出指定组织的所有仓库（GitLab 使用 groups）
     - user_repos: 作者拥有或 Star 的项目列表 - 列出指定用户拥有或 Star 的仓库，支持合并查询和多种过滤排序选项
     
     认证：
     - GitHub: 使用环境变量 GITHUB_TOKEN（未设置则匿名，速率限制 60/h）
     - Gitee: 使用环境变量 GITEE_TOKEN（访问私有仓库时必填）
+    - GitLab: 使用环境变量 GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN（访问私有仓库时必填）
+    - 如需使用自定义 GitLab 实例，请设置 GITLAB_URL 环境变量（默认: https://gitlab.com/api/v4）
     - 设置 token 可提高 API 速率限制并访问私有仓库
     
     返回格式：

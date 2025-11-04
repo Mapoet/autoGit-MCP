@@ -92,6 +92,41 @@ def _add_gitee_auth(params: Dict[str, Any], client: Dict[str, Any]) -> Dict[str,
     return result_params
 
 
+def gitlab_client() -> Dict[str, Any]:
+    """创建 GitLab API 客户端（返回配置字典）。
+    
+    GitLab API v4 认证方式：
+    - Header: PRIVATE-TOKEN: {token}
+    - 或使用 OAuth token: Authorization: Bearer {token}
+    
+    支持自定义 GitLab 实例 URL（通过 GITLAB_URL 环境变量）。
+    """
+    token = os.getenv("GITLAB_TOKEN") or os.getenv("GITLAB_PRIVATE_TOKEN")
+    base_url = os.getenv("GITLAB_URL", "https://gitlab.com/api/v4")
+    headers = {}
+    if token:
+        # GitLab 使用 PRIVATE-TOKEN header
+        headers["PRIVATE-TOKEN"] = token
+    return {
+        "base_url": base_url,
+        "headers": headers,
+        "token": token,
+    }
+
+
+def _check_gitlab_token_error(resp: requests.Response) -> Optional[str]:
+    """检查 GitLab API 响应中的 token 相关错误，返回友好的错误消息。"""
+    if resp.status_code == 401:
+        try:
+            error_data = resp.json()
+            error_msg = error_data.get("message", "")
+            if "unauthorized" in error_msg.lower() or "token" in error_msg.lower():
+                return "GitLab API 认证失败。请检查：\n1. GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN 环境变量是否正确设置\n2. Token 是否有效（可能已过期）\n3. Token 是否有足够的权限（至少需要 read_api 权限）\n4. 如果使用自定义 GitLab 实例，请确保 GITLAB_URL 环境变量正确设置\n\n可以在 GitLab 设置中创建 Personal Access Token：https://gitlab.com/-/profile/personal_access_tokens"
+        except Exception:
+            pass
+    return None
+
+
 def parse_dt(s: Optional[str]) -> Optional[datetime]:
     """解析时间字符串为 datetime 对象（带 UTC 时区）。"""
     if not s:
@@ -1486,6 +1521,827 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
 
 
 # ──────────────────────────────────────────────────────────────
+# GitLab 实现函数
+# ──────────────────────────────────────────────────────────────
+
+
+def _encode_gitlab_path(path: str) -> str:
+    """对 GitLab 路径进行 URL 编码（将 / 编码为 %2F）。"""
+    import urllib.parse
+    return urllib.parse.quote(path, safe="")
+
+
+def _fetch_user_activity_across_repos_gitlab(
+    client: Dict[str, Any], args: CrossReposArgs
+) -> List[Dict[str, Any]]:
+    """不同仓库同一作者（明细）- GitLab 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    # 枚举仓库列表
+    owner = args.owner or args.author_login
+    if not owner:
+        raise ValueError("必须提供 owner 或 author_login")
+
+    # 获取用户的仓库列表
+    # GitLab: 使用 /projects?owned=true&username=username 或 /users/:id/projects
+    projects_url = f"{base_url}/projects"
+    page = 1
+    repos = []
+    while True:
+        params = {"page": page, "per_page": 100, "owned": "true", "username": owner}
+        try:
+            resp = requests.get(projects_url, headers=headers, params=params, timeout=30)
+            if resp.status_code == 401:
+                token_error = _check_gitlab_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+            if resp.status_code != 200:
+                resp.raise_for_status()
+            data = resp.json()
+            if not data or not isinstance(data, list):
+                break
+            repos.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 获取仓库列表失败: {e}", file=sys.stderr)
+            break
+
+    # 遍历仓库获取提交
+    for repo_data in repos:
+        repo_path = repo_data.get("path_with_namespace", "")
+        if not repo_path:
+            continue
+
+        # GitLab 项目 ID 可以是数字或路径（需要 URL 编码）
+        repo_id = _encode_gitlab_path(repo_path)
+        commits_url = f"{base_url}/projects/{repo_id}/repository/commits"
+
+        try:
+            commit_page = 1
+            cnt = 0
+            while cnt < args.max_per_repo:
+                params = {"page": commit_page, "per_page": 100}
+                if since:
+                    params["since"] = since.isoformat()
+                if until:
+                    params["until"] = until.isoformat()
+                if args.author_login:
+                    params["author"] = args.author_login
+
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                if resp.status_code != 200:
+                    resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data or not isinstance(commits_data, list):
+                    break
+
+                for c in commits_data:
+                    # 邮箱过滤
+                    if args.author_email:
+                        author_email = c.get("author_email", "")
+                        if author_email.lower() != args.author_email.lower():
+                            continue
+
+                    commit_date_str = c.get("created_at", "")
+                    if commit_date_str:
+                        try:
+                            commit_date = datetime.fromisoformat(commit_date_str.replace("Z", "+00:00"))
+                            if commit_date.tzinfo is None:
+                                commit_date = commit_date.replace(tzinfo=timezone.utc)
+
+                            if since and commit_date < since:
+                                continue
+                            if until and commit_date > until:
+                                continue
+                        except Exception:
+                            pass
+
+                    rows.append({
+                        "repo": repo_path,
+                        "sha": c.get("id", "")[:40],
+                        "date": commit_date_str,
+                        "author_login": c.get("author_name", ""),  # GitLab 使用 author_name
+                        "author_name": c.get("author_name", ""),
+                        "author_email": c.get("author_email", ""),
+                        "committer_login": c.get("committer_name", ""),
+                        "title": (c.get("message", "") or "").splitlines()[0],
+                        "url": c.get("web_url", ""),
+                    })
+                    cnt += 1
+                    if cnt >= args.max_per_repo:
+                        break
+
+                if len(commits_data) < 100 or cnt >= args.max_per_repo:
+                    break
+                commit_page += 1
+
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 跳过 {repo_path}: {e}", file=sys.stderr)
+            continue
+
+    return rows
+
+
+def _fetch_repo_activity_across_authors_gitlab(
+    client: Dict[str, Any], args: RepoAuthorsArgs
+) -> List[Dict[str, Any]]:
+    """同一仓库不同作者（明细）- GitLab 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    # GitLab 项目 ID 可以是数字或路径（需要 URL 编码）
+    repo_id = _encode_gitlab_path(args.repo_full)
+    commits_url = f"{base_url}/projects/{repo_id}/repository/commits"
+
+    authors_login = list({a for a in (args.authors_login or []) if a})
+    authors_emails = [e.lower() for e in (args.authors_emails or []) if e]
+
+    # 无作者清单 = 拉时间窗内所有提交
+    if not authors_login and not authors_emails:
+        commit_page = 1
+        while True:
+            params = {"page": commit_page, "per_page": 100}
+            if since:
+                params["since"] = since.isoformat()
+            if until:
+                params["until"] = until.isoformat()
+
+            try:
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                if resp.status_code != 200:
+                    resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data or not isinstance(commits_data, list):
+                    break
+
+                for c in commits_data:
+                    rows.append({
+                        "repo": args.repo_full,
+                        "sha": c.get("id", "")[:40],
+                        "date": c.get("created_at", ""),
+                        "author_login": c.get("author_name", ""),
+                        "author_name": c.get("author_name", ""),
+                        "author_email": c.get("author_email", ""),
+                        "committer_login": c.get("committer_name", ""),
+                        "title": (c.get("message", "") or "").splitlines()[0],
+                        "url": c.get("web_url", ""),
+                    })
+
+                if len(commits_data) < 100:
+                    break
+                commit_page += 1
+            except ValueError:
+                raise
+            except Exception as e:
+                print(f"[warn] 获取提交失败: {e}", file=sys.stderr)
+                break
+        return rows
+
+    # 按 author 参数拉（GitLab 支持 author 参数）
+    for login in authors_login:
+        commit_page = 1
+        cnt = 0
+        while cnt < args.max_per_author:
+            params = {"page": commit_page, "per_page": 100, "author": login}
+            if since:
+                params["since"] = since.isoformat()
+            if until:
+                params["until"] = until.isoformat()
+
+            try:
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                if resp.status_code != 200:
+                    resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data or not isinstance(commits_data, list):
+                    break
+
+                for c in commits_data:
+                    if authors_emails:
+                        author_email = c.get("author_email", "")
+                        if not author_email or author_email.lower() not in authors_emails:
+                            continue
+
+                    rows.append({
+                        "repo": args.repo_full,
+                        "sha": c.get("id", "")[:40],
+                        "date": c.get("created_at", ""),
+                        "author_login": c.get("author_name", ""),
+                        "author_name": c.get("author_name", ""),
+                        "author_email": c.get("author_email", ""),
+                        "committer_login": c.get("committer_name", ""),
+                        "title": (c.get("message", "") or "").splitlines()[0],
+                        "url": c.get("web_url", ""),
+                    })
+                    cnt += 1
+                    if cnt >= args.max_per_author:
+                        break
+
+                if len(commits_data) < 100 or cnt >= args.max_per_author:
+                    break
+                commit_page += 1
+            except ValueError:
+                raise
+            except Exception as e:
+                print(f"[warn] login {login}: {e}", file=sys.stderr)
+                break
+
+    # 仅邮箱（补漏）
+    if authors_emails:
+        commit_page = 1
+        cnt = 0
+        while cnt < args.max_per_author:
+            params = {"page": commit_page, "per_page": 100}
+            if since:
+                params["since"] = since.isoformat()
+            if until:
+                params["until"] = until.isoformat()
+
+            try:
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                if resp.status_code != 200:
+                    resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data or not isinstance(commits_data, list):
+                    break
+
+                for c in commits_data:
+                    author_email = c.get("author_email", "")
+                    if not author_email or author_email.lower() not in authors_emails:
+                        continue
+
+                    rows.append({
+                        "repo": args.repo_full,
+                        "sha": c.get("id", "")[:40],
+                        "date": c.get("created_at", ""),
+                        "author_login": c.get("author_name", ""),
+                        "author_name": c.get("author_name", ""),
+                        "author_email": author_email,
+                        "committer_login": c.get("committer_name", ""),
+                        "title": (c.get("message", "") or "").splitlines()[0],
+                        "url": c.get("web_url", ""),
+                    })
+                    cnt += 1
+                    if cnt >= args.max_per_author:
+                        break
+
+                if len(commits_data) < 100 or cnt >= args.max_per_author:
+                    break
+                commit_page += 1
+            except ValueError:
+                raise
+            except Exception as e:
+                print(f"[warn] email pass: {e}", file=sys.stderr)
+                break
+
+    return rows
+
+
+def _list_repos_for_author_gitlab(
+    client: Dict[str, Any], args: ReposByAuthorArgs
+) -> List[Dict[str, Any]]:
+    """同一作者在哪些仓库（列表）- GitLab 版本。"""
+    results: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = defaultdict(int)
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    owner = args.owner or args.author_login
+    if not owner:
+        raise ValueError("必须提供 owner 或 author_login")
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    # 获取用户的仓库列表
+    projects_url = f"{base_url}/projects"
+    page = 1
+    repos = []
+    while True:
+        params = {"page": page, "per_page": 100, "owned": "true", "username": owner}
+        try:
+            resp = requests.get(projects_url, headers=headers, params=params, timeout=30)
+            if resp.status_code == 401:
+                token_error = _check_gitlab_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+            if resp.status_code != 200:
+                resp.raise_for_status()
+            data = resp.json()
+            if not data or not isinstance(data, list):
+                break
+            repos.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 获取仓库列表失败: {e}", file=sys.stderr)
+            break
+
+    # 遍历仓库统计提交
+    for repo_data in repos:
+        repo_path = repo_data.get("path_with_namespace", "")
+        if not repo_path:
+            continue
+
+        repo_id = _encode_gitlab_path(repo_path)
+        commits_url = f"{base_url}/projects/{repo_id}/repository/commits"
+
+        try:
+            commit_page = 1
+            repo_count = 0
+            while True:
+                params = {"page": commit_page, "per_page": 100}
+                if since:
+                    params["since"] = since.isoformat()
+                if until:
+                    params["until"] = until.isoformat()
+                if args.author_login:
+                    params["author"] = args.author_login
+
+                resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                if resp.status_code != 200:
+                    resp.raise_for_status()
+                commits_data = resp.json()
+
+                if not commits_data or not isinstance(commits_data, list):
+                    break
+
+                for c in commits_data:
+                    if args.author_email:
+                        author_email = c.get("author_email", "")
+                        if not author_email or author_email.lower() != args.author_email.lower():
+                            continue
+                    repo_count += 1
+
+                if len(commits_data) < 100:
+                    break
+                commit_page += 1
+
+            if repo_count >= args.min_commits:
+                counts[repo_path] = repo_count
+
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 跳过 {repo_path}: {e}", file=sys.stderr)
+            continue
+
+    for repo_full, cnt in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+        results.append({"repo": repo_full, "commits": cnt})
+
+    return results
+
+
+def _list_authors_for_repo_gitlab(
+    client: Dict[str, Any], args: AuthorsByRepoArgs
+) -> List[Dict[str, Any]]:
+    """同一仓库活跃作者（列表）- GitLab 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    repo_id = _encode_gitlab_path(args.repo_full)
+    commits_url = f"{base_url}/projects/{repo_id}/repository/commits"
+
+    since = parse_dt(args.since)
+    until = parse_dt(args.until)
+
+    counter: Counter[str] = Counter()
+    meta: Dict[str, Tuple[str, str]] = {}
+
+    commit_page = 1
+    while True:
+        params = {"page": commit_page, "per_page": 100}
+        if since:
+            params["since"] = since.isoformat()
+        if until:
+            params["until"] = until.isoformat()
+
+        try:
+            resp = requests.get(commits_url, headers=headers, params=params, timeout=30)
+            if resp.status_code == 401:
+                token_error = _check_gitlab_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+            if resp.status_code != 200:
+                resp.raise_for_status()
+            commits_data = resp.json()
+
+            if not commits_data or not isinstance(commits_data, list):
+                break
+
+            for c in commits_data:
+                login = c.get("author_name", "") or ""
+                name = c.get("author_name", "") or ""
+                email = c.get("author_email", "") or ""
+
+                if args.prefer == "email" and email:
+                    key = email.lower()
+                elif args.prefer == "name" and name:
+                    key = name
+                else:
+                    key = login or email.lower() or name or "(unknown)"
+
+                counter[key] += 1
+                meta.setdefault(key, (login, email))
+
+            if len(commits_data) < 100:
+                break
+            commit_page += 1
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 获取提交失败: {e}", file=sys.stderr)
+            break
+
+    for key, cnt in counter.most_common():
+        if cnt >= args.min_commits:
+            login, email = meta.get(key, ("", ""))
+            rows.append({
+                "repo": args.repo_full,
+                "author_key": key,
+                "author_login": login,
+                "author_email": email,
+                "commits": cnt,
+            })
+
+    return rows
+
+
+def _search_repos_by_keyword_gitlab(
+    client: Dict[str, Any], args: SearchReposArgs
+) -> List[Dict[str, Any]]:
+    """关键词检索仓库 - GitLab 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    # GitLab 搜索 API
+    search_url = f"{base_url}/projects"
+    page = 1
+
+    while len(rows) < args.limit:
+        params = {
+            "search": args.keyword,
+            "page": page,
+            "per_page": min(100, args.limit - len(rows)),
+        }
+        if args.owner:
+            params["username"] = args.owner
+
+        try:
+            resp = requests.get(search_url, headers=headers, params=params, timeout=30)
+            
+            if resp.status_code == 401:
+                token_error = _check_gitlab_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+            elif resp.status_code != 200:
+                resp.raise_for_status()
+            
+            data = resp.json()
+
+            if not data or not isinstance(data, list):
+                break
+
+            for repo in data:
+                # 过滤条件
+                if args.min_stars and repo.get("star_count", 0) < args.min_stars:
+                    continue
+                if args.owner and repo.get("owner", {}).get("username", "") != args.owner:
+                    continue
+                if args.language and repo.get("default_branch"):
+                    # GitLab 没有直接的语言字段，可以通过仓库内容判断（这里简化处理）
+                    pass
+
+                rows.append({
+                    "full_name": repo.get("path_with_namespace", ""),
+                    "name": repo.get("name", ""),
+                    "owner": repo.get("namespace", {}).get("path", "") if repo.get("namespace") else "",
+                    "description": repo.get("description", "") or "",
+                    "language": repo.get("default_branch", "") or "",  # GitLab 没有直接的语言字段
+                    "stargazers_count": repo.get("star_count", 0),
+                    "forks_count": repo.get("forks_count", 0),
+                    "archived": repo.get("archived", False),
+                    "private": repo.get("visibility", "private") != "public",
+                    "updated_at": repo.get("last_activity_at", "") or repo.get("updated_at", ""),
+                    "pushed_at": repo.get("last_activity_at", "") or "",
+                    "html_url": repo.get("web_url", ""),
+                })
+
+                if len(rows) >= args.limit:
+                    break
+
+            if len(data) < 100:
+                break
+            page += 1
+
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 搜索失败: {e}", file=sys.stderr)
+            break
+
+    # 本地排序
+    if args.sort == "stars":
+        rows.sort(key=lambda r: r["stargazers_count"], reverse=(args.order == "desc"))
+    elif args.sort == "updated":
+        rows.sort(key=lambda r: r["updated_at"] or "", reverse=(args.order == "desc"))
+
+    return rows[:args.limit]
+
+
+def _list_repos_for_org_gitlab(client: Dict[str, Any], args: OrgReposArgs) -> List[Dict[str, Any]]:
+    """组织仓库列表 - GitLab 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    # GitLab 使用 groups 而不是 orgs
+    # 组 ID 可以是数字或路径（需要 URL 编码）
+    group_id = _encode_gitlab_path(args.org)
+    repos_url = f"{base_url}/groups/{group_id}/projects"
+    page = 1
+
+    while len(rows) < args.limit:
+        params = {
+            "page": page,
+            "per_page": min(100, args.limit - len(rows)),
+        }
+        # GitLab 的 repo_type 映射：all/public/private
+        if args.repo_type == "public":
+            params["visibility"] = "public"
+        elif args.repo_type == "private":
+            params["visibility"] = "private"
+
+        try:
+            resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+            
+            if resp.status_code == 401:
+                token_error = _check_gitlab_token_error(resp)
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+            elif resp.status_code != 200:
+                resp.raise_for_status()
+            
+            data = resp.json()
+
+            if not data or not isinstance(data, list):
+                break
+
+            for repo in data:
+                if (not args.include_archived) and repo.get("archived", False):
+                    continue
+
+                rows.append({
+                    "full_name": repo.get("path_with_namespace", ""),
+                    "name": repo.get("name", ""),
+                    "description": repo.get("description", "") or "",
+                    "language": repo.get("default_branch", "") or "",
+                    "stargazers_count": repo.get("star_count", 0),
+                    "forks_count": repo.get("forks_count", 0),
+                    "archived": repo.get("archived", False),
+                    "private": repo.get("visibility", "private") != "public",
+                    "updated_at": repo.get("last_activity_at", "") or repo.get("updated_at", ""),
+                    "pushed_at": repo.get("last_activity_at", "") or "",
+                    "html_url": repo.get("web_url", ""),
+                })
+
+                if len(rows) >= args.limit:
+                    break
+
+            if len(data) < 100:
+                break
+            page += 1
+
+        except ValueError:
+            raise
+        except Exception as e:
+            print(f"[warn] 获取组织仓库失败: {e}", file=sys.stderr)
+            break
+
+    return rows
+
+
+def _list_user_repos_gitlab(client: Dict[str, Any], args: UserReposArgs) -> List[Dict[str, Any]]:
+    """列出某用户 owned / starred / both 的仓库列表 - GitLab 版本。"""
+    rows: List[Dict[str, Any]] = []
+    base_url = client["base_url"]
+    headers = client["headers"]
+
+    def add_repo(repo_data: Dict[str, Any], relation: str) -> bool:
+        """添加仓库到结果列表（应用过滤条件）。"""
+        archived = repo_data.get("archived") or False
+        is_fork = repo_data.get("forked_from_project") is not None
+        is_private = repo_data.get("visibility", "private") != "public"
+        
+        if (not args.include_archived) and archived:
+            return False
+        if (not args.include_forks) and is_fork:
+            return False
+        if (not args.include_private) and is_private:
+            return False
+
+        rows.append({
+            "relation": relation,
+            "full_name": repo_data.get("path_with_namespace", ""),
+            "name": repo_data.get("name", ""),
+            "owner": repo_data.get("namespace", {}).get("path", "") if repo_data.get("namespace") else "",
+            "description": repo_data.get("description", "") or "",
+            "language": repo_data.get("default_branch", "") or "",
+            "stargazers_count": repo_data.get("star_count", 0) or 0,
+            "forks_count": repo_data.get("forks_count", 0) or 0,
+            "archived": archived,
+            "private": is_private,
+            "updated_at": repo_data.get("last_activity_at", "") or repo_data.get("updated_at", "") or "",
+            "pushed_at": repo_data.get("last_activity_at", "") or "",
+            "html_url": repo_data.get("web_url", ""),
+        })
+        return True
+
+    # owned
+    if args.mode in ("owned", "both"):
+        try:
+            projects_url = f"{base_url}/projects"
+            page = 1
+            max_collect = args.limit + 50 if args.mode == "both" else args.limit
+
+            while len(rows) < max_collect:
+                params = {"page": page, "per_page": 100, "owned": "true", "username": args.login}
+                if not args.include_private:
+                    params["visibility"] = "public"
+
+                resp = requests.get(projects_url, headers=headers, params=params, timeout=30)
+                
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+                elif resp.status_code == 404:
+                    print(f"[warn] 用户 '{args.login}' 不存在或无法访问", file=sys.stderr)
+                    break
+                elif resp.status_code != 200:
+                    resp.raise_for_status()
+                
+                data = resp.json()
+                
+                if not data or not isinstance(data, list):
+                    break
+
+                for repo in data:
+                    add_repo(repo, "owned")
+                    if len(rows) >= max_collect:
+                        break
+
+                if len(data) < 100 or len(rows) >= max_collect:
+                    break
+                page += 1
+        except ValueError:
+            raise
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                print(f"[warn] 用户 '{args.login}' 可能不存在或无法访问", file=sys.stderr)
+            elif e.response.status_code == 401:
+                token_error = _check_gitlab_token_error(e.response) if hasattr(e, 'response') else None
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+            else:
+                raise
+        except Exception as e:
+            raise RuntimeError(f"获取 owned repos 失败: {str(e)}") from e
+
+    # starred
+    if args.mode in ("starred", "both"):
+        try:
+            projects_url = f"{base_url}/projects"
+            page = 1
+            max_collect = args.limit + 50 if args.mode == "both" else args.limit
+
+            while len(rows) < max_collect:
+                params = {"page": page, "per_page": 100, "starred": "true"}
+                if not args.include_private:
+                    params["visibility"] = "public"
+
+                resp = requests.get(projects_url, headers=headers, params=params, timeout=30)
+                
+                if resp.status_code == 401:
+                    token_error = _check_gitlab_token_error(resp)
+                    if token_error:
+                        raise ValueError(token_error)
+                    raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+                elif resp.status_code == 404:
+                    print(f"[warn] 用户 '{args.login}' 的 starred repos 无法访问", file=sys.stderr)
+                    break
+                elif resp.status_code != 200:
+                    resp.raise_for_status()
+                
+                data = resp.json()
+                
+                if not data or not isinstance(data, list):
+                    break
+
+                for repo in data:
+                    add_repo(repo, "starred")
+                    if len(rows) >= max_collect:
+                        break
+
+                if len(data) < 100 or len(rows) >= max_collect:
+                    break
+                page += 1
+        except ValueError:
+            raise
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                print(f"[warn] 用户 '{args.login}' 的 starred repos 无法访问", file=sys.stderr)
+            elif e.response.status_code == 401:
+                token_error = _check_gitlab_token_error(e.response) if hasattr(e, 'response') else None
+                if token_error:
+                    raise ValueError(token_error)
+                raise ValueError("GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量")
+            else:
+                raise
+        except Exception as e:
+            raise RuntimeError(f"获取 starred repos 失败: {str(e)}") from e
+
+    # 去重
+    seen: Dict[str, int] = {}
+    unique_rows: List[Dict[str, Any]] = []
+    for r in rows:
+        full_name = r["full_name"]
+        if full_name not in seen:
+            seen[full_name] = len(unique_rows)
+            unique_rows.append(r)
+        elif unique_rows[seen[full_name]]["relation"] == "starred" and r["relation"] == "owned":
+            unique_rows[seen[full_name]] = r
+
+    rows = unique_rows
+
+    # 统一排序
+    key_map: Dict[str, Any] = {
+        "updated": lambda r: r["updated_at"] or "",
+        "pushed": lambda r: r["pushed_at"] or "",
+        "full_name": lambda r: r["full_name"] or "",
+        "stars": lambda r: r["stargazers_count"] or 0,
+    }
+    keyfunc = key_map.get(args.sort, key_map["updated"])
+    rows.sort(key=keyfunc, reverse=(args.order == "desc"))
+
+    # 限量
+    if len(rows) > args.limit:
+        rows = rows[:args.limit]
+
+    return rows
+
+
+# ──────────────────────────────────────────────────────────────
 # 统一入口函数
 # ──────────────────────────────────────────────────────────────
 
@@ -1540,6 +2396,25 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
             else:
                 raise ValueError(f"不支持的 cmd: {cmd}")
 
+        elif provider == CatalogProvider.gitlab:
+            client = gitlab_client()
+            if cmd == CmdCatalog.cross_repos:
+                rows = _fetch_user_activity_across_repos_gitlab(client, args)  # type: ignore
+            elif cmd == CmdCatalog.repo_authors:
+                rows = _fetch_repo_activity_across_authors_gitlab(client, args)  # type: ignore
+            elif cmd == CmdCatalog.repos_by_author:
+                rows = _list_repos_for_author_gitlab(client, args)  # type: ignore
+            elif cmd == CmdCatalog.authors_by_repo:
+                rows = _list_authors_for_repo_gitlab(client, args)  # type: ignore
+            elif cmd == CmdCatalog.search_repos:
+                rows = _search_repos_by_keyword_gitlab(client, args)  # type: ignore
+            elif cmd == CmdCatalog.org_repos:
+                rows = _list_repos_for_org_gitlab(client, args)  # type: ignore
+            elif cmd == CmdCatalog.user_repos:
+                rows = _list_user_repos_gitlab(client, args)  # type: ignore
+            else:
+                raise ValueError(f"不支持的 cmd: {cmd}")
+
         else:
             raise ValueError(f"不支持的 provider: {provider}")
 
@@ -1553,7 +2428,7 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
         # 参数验证错误或认证错误（ValueError 也用于认证错误）
         error_msg = str(e)
         # 检查是否是认证相关错误
-        if "认证" in error_msg or "token" in error_msg.lower() or "unauthorized" in error_msg.lower() or "GITEE_TOKEN" in error_msg or "GITHUB_TOKEN" in error_msg:
+        if "认证" in error_msg or "token" in error_msg.lower() or "unauthorized" in error_msg.lower() or "GITEE_TOKEN" in error_msg or "GITHUB_TOKEN" in error_msg or "GITLAB_TOKEN" in error_msg:
             return json.dumps({
                 "exit_code": 1,
                 "count": 0,
@@ -1587,17 +2462,38 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
         }, ensure_ascii=False)
 
     except requests.exceptions.HTTPError as e:
-        # Gitee API HTTP 错误（包含状态码信息）
-        error_msg = f"Gitee API HTTP 错误: {e.response.status_code}"
+        # Gitee/GitLab API HTTP 错误（包含状态码信息）
+        error_msg = f"API HTTP 错误: {e.response.status_code}"
         if e.response.status_code == 404:
             error_msg += " (用户不存在或资源未找到)"
         elif e.response.status_code == 401:
             # 401 错误应该提供更详细的认证信息
-            token_error = _check_gitee_token_error(e.response)
-            if token_error:
-                error_msg = token_error
-            else:
-                error_msg += " (需要认证，请设置 GITEE_TOKEN 环境变量)"
+            # 尝试检测是 Gitee 还是 GitLab
+            try:
+                error_detail = e.response.json()
+                error_text = str(error_detail.get("message", "")).lower()
+                if "gitlab" in error_text or "private-token" in error_text:
+                    token_error = _check_gitlab_token_error(e.response)
+                    if token_error:
+                        error_msg = token_error
+                    else:
+                        error_msg = "GitLab API 需要认证，请设置 GITLAB_TOKEN 环境变量"
+                else:
+                    token_error = _check_gitee_token_error(e.response)
+                    if token_error:
+                        error_msg = token_error
+                    else:
+                        error_msg += " (需要认证，请设置 GITEE_TOKEN 环境变量)"
+            except Exception:
+                token_error = _check_gitlab_token_error(e.response)
+                if token_error:
+                    error_msg = token_error
+                else:
+                    token_error = _check_gitee_token_error(e.response)
+                    if token_error:
+                        error_msg = token_error
+                    else:
+                        error_msg += " (需要认证)"
         try:
             error_detail = e.response.json()
             if "message" in error_detail:
@@ -1612,12 +2508,12 @@ def execute_git_catalog_command(payload: GitCatalogInput) -> str:
         }, ensure_ascii=False)
     
     except requests.exceptions.RequestException as e:
-        # Gitee API 网络错误
+        # API 网络错误
         return json.dumps({
             "exit_code": 1,
             "count": 0,
             "rows": [],
-            "stderr": f"Gitee API 网络错误: {str(e)}",
+            "stderr": f"API 网络错误: {str(e)}",
         }, ensure_ascii=False)
 
     except Exception as e:

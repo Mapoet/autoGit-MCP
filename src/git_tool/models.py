@@ -160,6 +160,7 @@ class WorkLogInput(BaseModel):
     repo_paths: list[str] = Field(default_factory=list, description="Local repository paths (comma-separated or list)")
     github_repos: list[str] = Field(default_factory=list, description="GitHub repositories (format: OWNER/REPO)")
     gitee_repos: list[str] = Field(default_factory=list, description="Gitee repositories (format: OWNER/REPO)")
+    gitlab_repos: list[str] = Field(default_factory=list, description="GitLab repositories (format: OWNER/REPO or NAMESPACE/PROJECT)")
     
     # Time range
     since: Optional[str] = Field(default=None, description="Start datetime (ISO format or YYYY-MM-DD). If not set, defaults to today 00:00:00")
@@ -217,8 +218,8 @@ class WorkLogInput(BaseModel):
     @model_validator(mode="after")
     def _validate_repos(self) -> "WorkLogInput":
         """Ensure at least one repository source is provided."""
-        if not self.repo_paths and not self.github_repos and not self.gitee_repos:
-            raise ValueError("At least one repository source must be provided (repo_paths, github_repos, or gitee_repos)")
+        if not self.repo_paths and not self.github_repos and not self.gitee_repos and not self.gitlab_repos:
+            raise ValueError("At least one repository source must be provided (repo_paths, github_repos, gitee_repos, or gitlab_repos)")
         return self
 
 
@@ -488,6 +489,7 @@ class CatalogProvider(str, Enum):
 
     github = "github"
     gitee = "gitee"
+    gitlab = "gitlab"
 
 
 class GitCatalogInput(BaseModel):
@@ -496,7 +498,7 @@ class GitCatalogInput(BaseModel):
     provider: CatalogProvider = Field(
         default=CatalogProvider.github,
         description="代码托管平台提供商",
-        examples=["github", "gitee"],
+        examples=["github", "gitee", "gitlab"],
     )
     cmd: CmdCatalog = Field(
         description="子命令",
