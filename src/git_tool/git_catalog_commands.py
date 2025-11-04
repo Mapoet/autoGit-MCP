@@ -1381,30 +1381,52 @@ def _list_user_repos_gitee(client: Dict[str, Any], args: UserReposArgs) -> List[
             repos_url = f"{base_url}/users/{args.login}/repos"
             page = 1
             max_collect = args.limit + 50 if args.mode == "both" else args.limit
+            token_available = bool(client.get("token"))
 
             while len(rows) < max_collect:
-                # Gitee API: 不带 type 参数时返回公开仓库，需要认证
-                # 如果有 token，可以使用 type=owner/all 获取更多仓库
+                # Gitee API: 不带 type 参数时返回公开仓库（无需认证）
+                # 如果有有效的 token，可以使用 type=owner/all 获取更多仓库（包括私有）
                 params = {"page": page, "per_page": 100}
-                if client.get("token"):
-                    # 有 token 时，根据 include_private 决定 type
-                    if args.include_private:
-                        params["type"] = "all"
-                    else:
-                        params["type"] = "owner"
-                # 使用 URL 参数方式添加认证（兼容性更好）
-                params = _add_gitee_auth(params, client)
+                
+                # 策略：如果有 token 且需要私有仓库，尝试使用 type 参数
+                # 如果 token 无效，降级为只获取公开仓库
+                use_private_query = token_available and args.include_private
+                
+                if use_private_query:
+                    # 尝试获取私有仓库：使用 type=all
+                    params["type"] = "all"
+                    params = _add_gitee_auth(params, client)
+                elif token_available:
+                    # 有 token 但不需要私有仓库：使用 type=owner（可能包含更多公开仓库）
+                    params["type"] = "owner"
+                    params = _add_gitee_auth(params, client)
+                # 否则：不带 token 和 type，只获取公开仓库
                 
                 resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
                 
                 # 检查 HTTP 状态码
                 if resp.status_code == 401:
-                    # 需要认证或 token 无效
-                    token_error = _check_gitee_token_error(resp)
-                    if token_error:
-                        raise ValueError(token_error)
+                    # Token 无效或权限不足
+                    if use_private_query:
+                        # 如果尝试获取私有仓库失败，降级为只获取公开仓库
+                        print(f"[warn] Token 无效或权限不足，无法获取私有仓库，仅返回公开仓库", file=sys.stderr)
+                        # 重试：不带 token 和 type，只获取公开仓库
+                        params = {"page": page, "per_page": 100}
+                        resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+                        if resp.status_code != 200:
+                            resp.raise_for_status()
                     else:
-                        raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
+                        # 如果只是查询公开仓库但返回 401，可能是 token 格式问题
+                        token_error = _check_gitee_token_error(resp)
+                        if token_error:
+                            # 尝试不带 token 重试
+                            print(f"[warn] {token_error}，尝试仅获取公开仓库", file=sys.stderr)
+                            params = {"page": page, "per_page": 100}
+                            resp = requests.get(repos_url, headers=headers, params=params, timeout=30)
+                            if resp.status_code != 200:
+                                resp.raise_for_status()
+                        else:
+                            raise ValueError("Gitee API 需要认证，请设置 GITEE_TOKEN 环境变量")
                 elif resp.status_code == 404:
                     # 用户不存在
                     print(f"[warn] 用户 '{args.login}' 不存在或无法访问", file=sys.stderr)
